@@ -19,11 +19,12 @@ dsp_guide/
 │   ├── spectral/               <- window functions
 │   ├── sampling/               <- decimation, interpolation, resampling
 │   ├── wavelet/                <- discrete wavelet transform
-│   └── coding/                 <- error detection, FEC, equalization
+│   ├── coding/                 <- error detection, FEC, equalization
+│   └── modulation/             <- QAM, OFDM, channel, coded OFDM
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 66 unit tests
+│   └── test_all.c              <- 79 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -58,6 +59,7 @@ dependencies.
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
 | **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving; LMS equalizer |
+| **Modulation** | QPSK / 16-QAM / 64-QAM with soft demapping; multipath + AWGN channel; OFDM (IFFT/CP/FFT, per-subcarrier equalization); end-to-end coded OFDM |
 
 ## Design notes
 
@@ -95,12 +97,17 @@ dependencies.
   codeword without interleaving but is fully survivable with it.
 - **Channel equalization** is an LMS adaptive FIR filter, the DSP front-
   end stage that cleans channel distortion before the decoder runs.
+- **Modulation** provides Gray-coded QAM (QPSK/16/64) with hard and soft
+  demapping, a multipath + AWGN channel model, and OFDM built directly
+  on the FFT (IFFT modulator, cyclic prefix, per-subcarrier equalizer).
+  The coded-OFDM transceiver wires the FFT, QAM, channel, and LDPC
+  modules into one end-to-end chain and measures raw vs coded BER.
 
 See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-66 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+79 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -113,5 +120,7 @@ correction, hard- and soft-decision Viterbi decoding, block and convolutional
 interleaver round-trips, interleaving-aided burst recovery, LDPC
 construction and syndrome checks, LDPC bit-flipping,
 sum-product and min-sum decoding, the BER-sweep noise monotonicity
-and the soft-beats-hard decoder ranking, and LMS equalizer
-convergence.
+and the soft-beats-hard decoder ranking, LMS equalizer convergence,
+QAM round-trips and unit-energy normalization, the multipath/AWGN
+channel, OFDM round-trips and per-subcarrier equalization, and the
+end-to-end coded-OFDM chain.

@@ -18,6 +18,8 @@
  *                  error correction (Hamming, Reed-Solomon,
  *                  convolutional/Viterbi, LDPC), interleaving, and
  *                  channel equalization
+ *   modulation/  - QAM, OFDM, channel model, and the end-to-end
+ *                  coded-OFDM transceiver
  *
  * Every module is annotated with: what problem it solves, its
  * computational complexity, and the trade-offs versus its alternatives.
@@ -48,5 +50,10 @@
 #include "coding/ldpc.h"
 #include "coding/interleave.h"
 #include "coding/equalize.h"
+
+#include "modulation/qam.h"
+#include "modulation/channel.h"
+#include "modulation/ofdm.h"
+#include "modulation/coded_ofdm.h"
 
 #endif /* DSP_H */

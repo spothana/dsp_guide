@@ -526,6 +526,131 @@ static void demo_ldpc(void) {
     dsp_ldpc_free(&code);
 }
 
+/* ---- OFDM and coded OFDM ---------------------------------------------- */
+
+static void demo_ofdm(void) {
+    section("OFDM (multicarrier modulation)");
+
+    /* QAM: map bits onto a constellation. */
+    printf("QAM constellations carry log2(M) bits per symbol:\n");
+    dsp_qam_order orders[3] = { DSP_QAM_QPSK, DSP_QAM_16, DSP_QAM_64 };
+    const char *qnames[3]   = { "QPSK", "16-QAM", "64-QAM" };
+    for (int k = 0; k < 3; ++k)
+        printf("  %-7s : %zu bits/symbol\n", qnames[k],
+               dsp_qam_bits_per_symbol(orders[k]));
+
+    /* OFDM round-trip through a multipath channel. */
+    enum { NFFT = 64, CP = 16 };
+    dsp_ofdm ofdm;
+    dsp_ofdm_init(&ofdm, NFFT, CP);
+
+    cplx freq[NFFT], tx[NFFT + CP], rx[NFFT + CP], rxf[NFFT], cfr[NFFT];
+    unsigned seed = 4321;
+    for (int i = 0; i < NFFT; ++i) {
+        seed = seed * 1103515245u + 12345u;
+        double re = ((seed >> 16) & 1) ? 0.707 : -0.707;
+        double im = ((seed >> 17) & 1) ? 0.707 : -0.707;
+        freq[i] = dsp_cplx(re, im);          /* one QPSK symbol/carrier */
+    }
+
+    printf("\nOFDM symbol: %d subcarriers, %d-sample cyclic prefix.\n",
+           NFFT, CP);
+    printf("  modulator = IFFT + cyclic prefix; demodulator = "
+           "remove prefix + FFT\n");
+
+    /* A 3-tap multipath channel, noiseless, to isolate the equalizer. */
+    cplx taps[3] = { dsp_cplx(1.0, 0.0),
+                     dsp_cplx(0.3, 0.1),
+                     dsp_cplx(0.1, -0.05) };
+    dsp_channel ch;
+    dsp_channel_init(&ch, taps, 3, 0.0, 1);
+
+    dsp_ofdm_modulate(&ofdm, freq, tx);
+    dsp_channel_apply(&ch, tx, rx, NFFT + CP);
+    dsp_ofdm_demodulate(&ofdm, rx, rxf);
+
+    /* Before equalization the multipath has rotated every subcarrier. */
+    double err_before = 0.0;
+    for (int i = 0; i < NFFT; ++i) {
+        double d = cabs(rxf[i] - freq[i]);
+        if (d > err_before) err_before = d;
+    }
+
+    /* One complex divide per subcarrier undoes the channel. */
+    dsp_channel_frequency_response(&ch, cfr, NFFT);
+    dsp_ofdm_equalize(&ofdm, rxf, cfr);
+    double err_after = 0.0;
+    for (int i = 0; i < NFFT; ++i) {
+        double d = cabs(rxf[i] - freq[i]);
+        if (d > err_after) err_after = d;
+    }
+
+    printf("  max subcarrier error before equalization: %.3f\n",
+           err_before);
+    printf("  max subcarrier error after  equalization: %.2e\n",
+           err_after);
+    printf("-> the cyclic prefix turns multipath into a per-subcarrier\n");
+    printf("   complex gain, so equalization is one divide per carrier.\n");
+
+    dsp_channel_free(&ch);
+}
+
+static void demo_coded_ofdm(void) {
+    section("CODED OFDM (FEC + OFDM end-to-end)");
+
+    /* nfft=64 subcarriers, QPSK -> 128 coded bits per OFDM symbol, so
+     * the LDPC codeword length must be 128. */
+    enum { NFFT = 64, CP = 16 };
+    dsp_ldpc code;
+    if (dsp_ldpc_make_regular(&code, 64, 128, 3, 6, 1) != 0) {
+        printf("  (LDPC construction failed)\n");
+        return;
+    }
+
+    dsp_ofdm ofdm;
+    dsp_ofdm_init(&ofdm, NFFT, CP);
+    dsp_coded_ofdm cfg = { .ofdm = ofdm,
+                           .order = DSP_QAM_QPSK,
+                           .code = &code };
+
+    printf("Full chain: LDPC encode -> QPSK map -> OFDM (IFFT+CP)\n");
+    printf("            -> multipath+AWGN channel -> OFDM demod\n");
+    printf("            -> equalize -> soft demap -> LDPC decode\n\n");
+
+    cplx taps[3] = { dsp_cplx(1.0, 0.0),
+                     dsp_cplx(0.25, 0.1),
+                     dsp_cplx(0.1, -0.05) };
+
+    printf("Bit-error rate over a 3-tap multipath channel "
+           "(200 OFDM frames):\n");
+    printf("  noise |  raw BER  | coded BER\n");
+    double levels[4] = { 0.3, 0.5, 0.7, 0.9 };
+    for (int k = 0; k < 4; ++k) {
+        dsp_channel ch;
+        dsp_channel_init(&ch, taps, 3, levels[k], 777);
+
+        size_t raw_tot = 0, cod_tot = 0;
+        size_t nbits = NFFT * 2;             /* QPSK: 2 bits/subcarrier */
+        for (int f = 0; f < 200; ++f) {
+            size_t be, re;
+            dsp_coded_ofdm_run_frame(&cfg, &ch, 50, &be, &re);
+            raw_tot += re;
+            cod_tot += be;
+        }
+        printf("   %.1f  | %9.4f | %9.4f\n", levels[k],
+               (double)raw_tot / (200.0 * nbits),
+               (double)cod_tot / (200.0 * nbits));
+
+        dsp_channel_free(&ch);
+    }
+    printf("-> 'raw' is the error rate straight off the QAM demapper;\n");
+    printf("   'coded' is after LDPC. The code cleans up the residual\n");
+    printf("   noise errors - this FEC + OFDM pairing is exactly what\n");
+    printf("   carries data in Wi-Fi, LTE, and 5G.\n");
+
+    dsp_ldpc_free(&code);
+}
+
 int main(void) {
     printf("DSP GUIDE - annotated demo\n");
     printf("C implementation of common digital signal processing algorithms.\n");
@@ -541,6 +666,8 @@ int main(void) {
     demo_ldpc();
     demo_interleaving();
     demo_equalization();
+    demo_ofdm();
+    demo_coded_ofdm();
 
     printf("\nAll demos complete.\n");
     return 0;

@@ -18,6 +18,7 @@ file(GLOB_RECURSE DSP_SOURCES
     src/sampling/*.c
     src/wavelet/*.c
     src/coding/*.c
+    src/modulation/*.c
 )
 
 # -- Shared library (all DSP implementations) ---------------------------------

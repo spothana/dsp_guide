@@ -200,3 +200,63 @@ waveform — equalizing channel distortion, recovering carrier and timing
 — so that the FEC stage sees errors it can actually correct. Soft-
 decision decoding closes the loop by passing the demodulator's
 confidence straight into the decoder instead of discarding it.
+
+## Modulation — QAM and OFDM
+
+How bits become a transmitted waveform, and how a receiver gets them
+back. This is the physical-layer counterpart to the error-control codes.
+
+### QAM
+
+| Order | Bits/symbol | Robustness |
+|---|---|---|
+| QPSK | 2 | Highest — points far apart |
+| 16-QAM | 4 | Medium |
+| 64-QAM | 6 | Lowest — needs a clean channel |
+
+QAM packs a group of bits into one point of a 2-D (I/Q) constellation.
+Higher orders carry more bits per symbol but pack points closer
+together, so they need a higher SNR — the rate-vs-robustness trade-off
+behind adaptive modulation in Wi-Fi and 5G. Gray coding labels adjacent
+points so a slip to a neighbour costs a single bit. The soft demapper
+emits a per-bit LLR instead of a hard bit, which is what a soft FEC
+decoder (LDPC, Viterbi) needs.
+
+### OFDM
+
+OFDM splits data across many narrow subcarriers sent in parallel. Its
+defining trick is that it *is* an FFT:
+
+- **modulator** = load one QAM symbol per subcarrier, then IFFT
+- **demodulator** = FFT, then read each subcarrier back
+- **cyclic prefix** = copy each block's tail to its front; this turns
+  the channel's linear convolution into circular convolution, so
+  multipath becomes one complex gain per subcarrier
+
+Equalization is therefore a single complex divide per subcarrier —
+vastly cheaper than the long time-domain equalizer a single-carrier
+system needs for the same multipath. This is why OFDM is the modulation
+of Wi-Fi, LTE, 5G, DVB-T, and ADSL.
+
+One implementation note: the IFFT's 1/N normalisation leaves the
+time-domain signal at 1/N the power of the constellation. The modulator
+multiplies by sqrt(N) (and the demodulator divides it back) so a
+time-domain noise level corresponds to a meaningful per-symbol SNR —
+the standard unitary OFDM convention.
+
+### Coded OFDM — the full chain
+
+Real systems wrap OFDM around an FEC code:
+
+```
+TX:  bits -> FEC encode -> QAM map -> OFDM (IFFT+CP) -> channel
+RX:  channel -> OFDM (CP-strip+FFT) -> equalize -> QAM soft-demap
+              -> FEC decode -> bits
+```
+
+OFDM tames multipath; the code cleans up the residual noise errors,
+including the bits on deeply faded subcarriers. The QAM soft demapper
+feeds per-bit LLRs (scaled by the channel's noise level) into the LDPC
+decoder — the soft-information handoff that makes coded OFDM perform
+close to channel capacity. This FEC + OFDM pairing is the data-carrying
+core of every modern broadband wireless standard.

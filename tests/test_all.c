@@ -850,6 +850,241 @@ static void test_ldpc_awgn_llr_sign(void) {
           "-1 sample -> negative LLR (bit 1)");
 }
 
+/* ---- modulation: QAM ------------------------------------------------ */
+
+static void test_qam_roundtrip(void) {
+    printf("[modulation] QAM map/demap round-trips for all orders\n");
+    dsp_qam_order orders[3] = { DSP_QAM_QPSK, DSP_QAM_16, DSP_QAM_64 };
+    int all_ok = 1;
+    for (int o = 0; o < 3; ++o) {
+        size_t bps = dsp_qam_bits_per_symbol(orders[o]);
+        size_t nb  = bps * 100;
+        uint8_t bits[6 * 100], back[6 * 100];
+        cplx sym[100];
+        unsigned s = 12345;
+        for (size_t i = 0; i < nb; ++i) {
+            s = s * 1103515245u + 12345u;
+            bits[i] = (uint8_t)((s >> 16) & 1);
+        }
+        size_t ns = dsp_qam_modulate(orders[o], bits, nb, sym);
+        dsp_qam_demodulate(orders[o], sym, ns, back);
+        for (size_t i = 0; i < nb; ++i)
+            if (bits[i] != back[i]) all_ok = 0;
+    }
+    CHECK(all_ok, "QPSK, 16-QAM, 64-QAM all round-trip noiselessly");
+}
+
+static void test_qam_unit_energy(void) {
+    printf("[modulation] QAM constellations have unit average energy\n");
+    dsp_qam_order orders[3] = { DSP_QAM_QPSK, DSP_QAM_16, DSP_QAM_64 };
+    int all_ok = 1;
+    for (int o = 0; o < 3; ++o) {
+        size_t bps = dsp_qam_bits_per_symbol(orders[o]);
+        size_t M   = (size_t)orders[o];
+        double energy = 0.0;
+        for (size_t v = 0; v < M; ++v) {
+            uint8_t bits[6];
+            for (size_t b = 0; b < bps; ++b)
+                bits[b] = (uint8_t)((v >> (bps - 1 - b)) & 1);
+            cplx sym;
+            dsp_qam_modulate(orders[o], bits, bps, &sym);
+            energy += creal(sym) * creal(sym) + cimag(sym) * cimag(sym);
+        }
+        if (!close(energy / (double)M, 1.0, 1e-9)) all_ok = 0;
+    }
+    CHECK(all_ok, "mean symbol energy is 1.0 for every order");
+}
+
+static void test_qam_soft_llr_sign(void) {
+    printf("[modulation] QAM soft demap has the right LLR sign\n");
+    /* Map all-zero bits, demap softly: every LLR must favour bit 0. */
+    uint8_t bits[4] = {0, 0, 0, 0};
+    cplx sym;
+    dsp_qam_modulate(DSP_QAM_16, bits, 4, &sym);
+    double llr[4];
+    dsp_qam_demodulate_soft(DSP_QAM_16, &sym, 1, 0.1, llr);
+    int ok = 1;
+    for (int i = 0; i < 4; ++i) if (llr[i] <= 0.0) ok = 0;
+    CHECK(ok, "all-zero symbol yields positive (bit-0) LLRs");
+}
+
+/* ---- modulation: channel -------------------------------------------- */
+
+static void test_channel_awgn_noiseless(void) {
+    printf("[modulation] noiseless AWGN channel passes samples through\n");
+    dsp_channel ch;
+    dsp_channel_init_awgn(&ch, 0.0, 1);
+    cplx in[8], out[8];
+    for (int i = 0; i < 8; ++i) in[i] = dsp_cplx(i - 4.0, 0.5 * i);
+    dsp_channel_apply(&ch, in, out, 8);
+    int ok = 1;
+    for (int i = 0; i < 8; ++i)
+        if (!close(creal(in[i]), creal(out[i]), 1e-12) ||
+            !close(cimag(in[i]), cimag(out[i]), 1e-12)) ok = 0;
+    CHECK(ok, "a unit-tap noiseless channel is an identity");
+    dsp_channel_free(&ch);
+}
+
+static void test_channel_multipath(void) {
+    printf("[modulation] multipath channel convolves with its taps\n");
+    cplx taps[2] = { dsp_cplx(1.0, 0.0), dsp_cplx(0.5, 0.0) };
+    dsp_channel ch;
+    dsp_channel_init(&ch, taps, 2, 0.0, 1);
+    cplx in[4]  = { dsp_cplx(1,0), dsp_cplx(0,0),
+                    dsp_cplx(0,0), dsp_cplx(0,0) };
+    cplx out[4];
+    dsp_channel_apply(&ch, in, out, 4);
+    /* An impulse in -> the tap vector out. */
+    CHECK(close(creal(out[0]), 1.0, 1e-12) &&
+          close(creal(out[1]), 0.5, 1e-12),
+          "impulse response equals the channel taps");
+    dsp_channel_free(&ch);
+}
+
+/* ---- modulation: OFDM ----------------------------------------------- */
+
+static void test_ofdm_roundtrip(void) {
+    printf("[modulation] OFDM modulate/demodulate round-trips\n");
+    dsp_ofdm o;
+    int rc = dsp_ofdm_init(&o, 64, 16);
+    CHECK(rc == 0, "OFDM initialises with 64 subcarriers, 16-CP");
+
+    cplx freq[64], time[80], back[64];
+    unsigned s = 555;
+    for (int i = 0; i < 64; ++i) {
+        s = s * 1103515245u + 12345u;
+        freq[i] = dsp_cplx(((s >> 16) & 1) ? 1.0 : -1.0,
+                           ((s >> 17) & 1) ? 1.0 : -1.0);
+    }
+    dsp_ofdm_modulate(&o, freq, time);
+    dsp_ofdm_demodulate(&o, time, back);
+
+    int ok = 1;
+    for (int i = 0; i < 64; ++i)
+        if (cabs(back[i] - freq[i]) > 1e-9) ok = 0;
+    CHECK(ok, "subcarriers survive the IFFT/CP/FFT round-trip");
+}
+
+static void test_ofdm_rejects_non_pow2(void) {
+    printf("[modulation] OFDM rejects a non-power-of-two FFT size\n");
+    dsp_ofdm o;
+    CHECK(dsp_ofdm_init(&o, 48, 8) == -1, "nfft=48 is rejected");
+    CHECK(dsp_ofdm_init(&o, 64, 80) == -1, "cp >= nfft is rejected");
+}
+
+static void test_ofdm_equalizes_multipath(void) {
+    printf("[modulation] OFDM equalizer undoes multipath distortion\n");
+    dsp_ofdm o;
+    dsp_ofdm_init(&o, 64, 16);
+
+    cplx freq[64], time[80], rx[80], rxf[64], cfr[64];
+    unsigned s = 909;
+    for (int i = 0; i < 64; ++i) {
+        s = s * 1103515245u + 12345u;
+        freq[i] = dsp_cplx(((s >> 16) & 1) ? 0.707 : -0.707,
+                           ((s >> 17) & 1) ? 0.707 : -0.707);
+    }
+    dsp_ofdm_modulate(&o, freq, time);
+
+    /* 3-tap multipath, noiseless: equalization should be near-exact. */
+    cplx taps[3] = { dsp_cplx(1.0, 0.0),
+                     dsp_cplx(0.3, 0.1),
+                     dsp_cplx(0.1, -0.05) };
+    dsp_channel ch;
+    dsp_channel_init(&ch, taps, 3, 0.0, 1);
+    dsp_channel_apply(&ch, time, rx, 80);
+    dsp_ofdm_demodulate(&o, rx, rxf);
+    dsp_channel_frequency_response(&ch, cfr, 64);
+    dsp_ofdm_equalize(&o, rxf, cfr);
+
+    double max_err = 0.0;
+    for (int i = 0; i < 64; ++i) {
+        double d = cabs(rxf[i] - freq[i]);
+        if (d > max_err) max_err = d;
+    }
+    CHECK(max_err < 1e-6,
+          "per-subcarrier equalization recovers the symbols");
+    dsp_channel_free(&ch);
+}
+
+/* ---- modulation: coded OFDM ----------------------------------------- */
+
+static void test_coded_ofdm_noiseless(void) {
+    printf("[modulation] coded OFDM is error-free on a clean channel\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 64, 128, 3, 6, 1);
+    dsp_ofdm o;
+    dsp_ofdm_init(&o, 64, 16);
+    dsp_coded_ofdm cfg = { .ofdm = o,
+                           .order = DSP_QAM_QPSK,
+                           .code = &code };
+
+    /* Noiseless 3-tap multipath: OFDM + equalizer should be exact, so
+     * the decoded frame has zero bit errors. */
+    cplx taps[3] = { dsp_cplx(1.0, 0.0),
+                     dsp_cplx(0.3, 0.1),
+                     dsp_cplx(0.1, -0.05) };
+    dsp_channel ch;
+    dsp_channel_init(&ch, taps, 3, 0.0, 1);
+
+    size_t be = 999, re = 999;
+    int rc = dsp_coded_ofdm_run_frame(&cfg, &ch, 50, &be, &re);
+    CHECK(rc == 0 && be == 0 && re == 0,
+          "noiseless multipath frame decodes with 0 errors");
+
+    dsp_channel_free(&ch);
+    dsp_ldpc_free(&code);
+}
+
+static void test_coded_ofdm_dimension_check(void) {
+    printf("[modulation] coded OFDM rejects a codeword/symbol mismatch\n");
+    /* QPSK on 64 subcarriers needs a 128-bit codeword; give it 120. */
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 60, 120, 3, 6, 1);
+    dsp_ofdm o;
+    dsp_ofdm_init(&o, 64, 16);
+    dsp_coded_ofdm cfg = { .ofdm = o,
+                           .order = DSP_QAM_QPSK,
+                           .code = &code };
+    dsp_channel ch;
+    dsp_channel_init_awgn(&ch, 0.1, 1);
+    CHECK(dsp_coded_ofdm_run_frame(&cfg, &ch, 50, NULL, NULL) == -1,
+          "code length != nfft*bits_per_symbol is rejected");
+    dsp_channel_free(&ch);
+    dsp_ldpc_free(&code);
+}
+
+static void test_coded_ofdm_corrects_errors(void) {
+    printf("[modulation] coded OFDM: FEC lowers BER below the raw rate\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 64, 128, 3, 6, 1);
+    dsp_ofdm o;
+    dsp_ofdm_init(&o, 64, 16);
+    dsp_coded_ofdm cfg = { .ofdm = o,
+                           .order = DSP_QAM_QPSK,
+                           .code = &code };
+
+    cplx taps[3] = { dsp_cplx(1.0, 0.0),
+                     dsp_cplx(0.25, 0.1),
+                     dsp_cplx(0.1, -0.05) };
+    dsp_channel ch;
+    dsp_channel_init(&ch, taps, 3, 0.6, 4242);
+
+    /* Accumulate raw (pre-FEC) and coded (post-FEC) errors. */
+    size_t raw_tot = 0, cod_tot = 0;
+    for (int f = 0; f < 150; ++f) {
+        size_t be, re;
+        dsp_coded_ofdm_run_frame(&cfg, &ch, 50, &be, &re);
+        raw_tot += re;
+        cod_tot += be;
+    }
+    CHECK(raw_tot > 0 && cod_tot < raw_tot,
+          "LDPC reduces the bit-error count versus raw demapping");
+
+    dsp_channel_free(&ch);
+    dsp_ldpc_free(&code);
+}
+
 int main(void) {
     printf("DSP GUIDE - test suite\n");
     printf("============================\n\n");
@@ -913,6 +1148,18 @@ int main(void) {
     test_ldpc_ber_monotonic();
     test_ldpc_minsum_beats_bitflip();
     test_ldpc_awgn_llr_sign();
+
+    test_qam_roundtrip();
+    test_qam_unit_energy();
+    test_qam_soft_llr_sign();
+    test_channel_awgn_noiseless();
+    test_channel_multipath();
+    test_ofdm_roundtrip();
+    test_ofdm_rejects_non_pow2();
+    test_ofdm_equalizes_multipath();
+    test_coded_ofdm_noiseless();
+    test_coded_ofdm_dimension_check();
+    test_coded_ofdm_corrects_errors();
 
     test_lms_converges();
 
