@@ -643,8 +643,215 @@ static void test_conv_interleaver_roundtrip(void) {
     dsp_conv_interleaver_free(&dtl);
 }
 
+/* ---- coding: LDPC --------------------------------------------------- */
+
+static void test_ldpc_from_matrix(void) {
+    printf("[coding] LDPC builds from a dense parity-check matrix\n");
+    /* A small 3x6 parity-check matrix. */
+    uint8_t H[3 * 6] = {
+        1,1,0,1,0,0,
+        0,1,1,0,1,0,
+        1,0,1,0,0,1
+    };
+    dsp_ldpc code;
+    int rc = dsp_ldpc_from_matrix(&code, H, 3, 6);
+    CHECK(rc == 0, "code constructed from matrix");
+
+    /* The all-zero word satisfies every parity check. */
+    uint8_t zero[6] = {0};
+    CHECK(dsp_ldpc_check(&code, zero) == 1,
+          "all-zero word is a valid codeword");
+
+    /* Degrees read back from H: variable 1 is in checks 0 and 1. */
+    int deg_ok = (code.col_deg[1] == 2 && code.row_deg[0] == 3);
+    CHECK(deg_ok, "node degrees match the matrix");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_syndrome(void) {
+    printf("[coding] LDPC syndrome weight flags corruption\n");
+    uint8_t H[3 * 6] = {
+        1,1,0,1,0,0,
+        0,1,1,0,1,0,
+        1,0,1,0,0,1
+    };
+    dsp_ldpc code;
+    dsp_ldpc_from_matrix(&code, H, 3, 6);
+
+    uint8_t word[6] = {0};
+    CHECK(dsp_ldpc_syndrome_weight(&code, word) == 0,
+          "clean codeword has syndrome weight 0");
+
+    word[0] ^= 1;     /* bit 0 is in checks 0 and 2 */
+    CHECK(dsp_ldpc_syndrome_weight(&code, word) == 2,
+          "flipping bit 0 fails its 2 checks");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_regular_construction(void) {
+    printf("[coding] regular LDPC generator yields exact node degrees\n");
+    dsp_ldpc code;
+    int rc = dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+    CHECK(rc == 0, "regular (wc=3,wr=4) code constructed");
+
+    int cols_ok = 1, rows_ok = 1;
+    for (size_t j = 0; j < code.n; ++j)
+        if (code.col_deg[j] != 3) cols_ok = 0;
+    for (size_t i = 0; i < code.m; ++i)
+        if (code.row_deg[i] != 4) rows_ok = 0;
+    CHECK(cols_ok, "every variable node has degree 3");
+    CHECK(rows_ok, "every check node has degree 4");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_regular_rejects_bad_params(void) {
+    printf("[coding] regular LDPC generator rejects inconsistent sizes\n");
+    dsp_ldpc code;
+    /* n*wc = 12*3 = 36, m*wr = 7*4 = 28 -> mismatch, must fail. */
+    CHECK(dsp_ldpc_make_regular(&code, 7, 12, 3, 4, 1) == -1,
+          "n*wc != m*wr is rejected");
+}
+
+static void test_ldpc_bitflip_single_error(void) {
+    printf("[coding] LDPC bit-flipping corrects a single-bit error\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+    uint8_t cw[12] = {0};
+
+    int all_ok = 1;
+    for (int b = 0; b < 12; ++b) {
+        uint8_t r[12];
+        for (int i = 0; i < 12; ++i) r[i] = cw[i];
+        r[b] ^= 1;
+        int it = dsp_ldpc_decode_bitflip(&code, r, 40);
+        if (it < 0) { all_ok = 0; continue; }
+        for (int i = 0; i < 12; ++i)
+            if (r[i] != cw[i]) all_ok = 0;
+    }
+    CHECK(all_ok, "every single-bit error is corrected");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_sumproduct_corrects(void) {
+    printf("[coding] LDPC sum-product corrects multiple soft errors\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+    uint8_t cw[12] = {0};
+
+    /* Try every pair of wrong-sign bits; sum-product should fix all. */
+    int all_ok = 1;
+    for (int a = 0; a < 12 && all_ok; ++a) {
+        for (int b = a + 1; b < 12; ++b) {
+            double llr[12];
+            for (int i = 0; i < 12; ++i) llr[i] = 3.0;
+            llr[a] = -1.0;
+            llr[b] = -1.0;
+            uint8_t out[12];
+            int it = dsp_ldpc_decode_sumproduct(&code, llr, out, 50);
+            if (it < 0) { all_ok = 0; break; }
+            for (int i = 0; i < 12; ++i)
+                if (out[i] != cw[i]) { all_ok = 0; break; }
+        }
+    }
+    CHECK(all_ok, "all 2-bit wrong-sign patterns are corrected");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_sumproduct_clean(void) {
+    printf("[coding] LDPC sum-product accepts a clean codeword fast\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+
+    double llr[12];
+    for (int i = 0; i < 12; ++i) llr[i] = 4.0;   /* all strongly bit 0 */
+    uint8_t out[12];
+    int it = dsp_ldpc_decode_sumproduct(&code, llr, out, 50);
+
+    int zeros = 1;
+    for (int i = 0; i < 12; ++i) if (out[i] != 0) zeros = 0;
+    CHECK(it >= 0 && it <= 1 && zeros,
+          "clean input decodes to the all-zero codeword in <=1 pass");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_minsum_corrects(void) {
+    printf("[coding] LDPC min-sum corrects multiple soft errors\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+    uint8_t cw[12] = {0};
+
+    /* Same 2-bit wrong-sign sweep used for sum-product. */
+    int all_ok = 1;
+    for (int a = 0; a < 12 && all_ok; ++a) {
+        for (int b = a + 1; b < 12; ++b) {
+            double llr[12];
+            for (int i = 0; i < 12; ++i) llr[i] = 3.0;
+            llr[a] = -1.0;
+            llr[b] = -1.0;
+            uint8_t out[12];
+            int it = dsp_ldpc_decode_minsum(&code, llr, out, 0.75, 50);
+            if (it < 0) { all_ok = 0; break; }
+            for (int i = 0; i < 12; ++i)
+                if (out[i] != cw[i]) { all_ok = 0; break; }
+        }
+    }
+    CHECK(all_ok, "min-sum corrects all 2-bit wrong-sign patterns");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_ber_monotonic(void) {
+    printf("[coding] LDPC bit-error rate rises with channel noise\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+
+    /* The waterfall: more noise must not give a lower BER. */
+    double low  = dsp_ldpc_ber_sweep(&code, DSP_LDPC_SUMPRODUCT,
+                                     0.4, 1000, 50, 7);
+    double high = dsp_ldpc_ber_sweep(&code, DSP_LDPC_SUMPRODUCT,
+                                     1.0, 1000, 50, 7);
+    CHECK(low >= 0.0 && high >= 0.0 && high > low,
+          "BER at high noise exceeds BER at low noise");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_minsum_beats_bitflip(void) {
+    printf("[coding] soft decoders outperform hard bit-flipping\n");
+    dsp_ldpc code;
+    dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1);
+
+    /* At a moderate noise level the soft decoders should have a
+     * clearly lower bit-error rate than hard-decision bit-flipping. */
+    double bf = dsp_ldpc_ber_sweep(&code, DSP_LDPC_BITFLIP,
+                                   0.7, 2000, 50, 99);
+    double sp = dsp_ldpc_ber_sweep(&code, DSP_LDPC_SUMPRODUCT,
+                                   0.7, 2000, 50, 99);
+    double mn = dsp_ldpc_ber_sweep(&code, DSP_LDPC_MINSUM,
+                                   0.7, 2000, 50, 99);
+    CHECK(sp < bf && mn < bf,
+          "sum-product and min-sum both beat bit-flipping");
+
+    dsp_ldpc_free(&code);
+}
+
+static void test_ldpc_awgn_llr_sign(void) {
+    printf("[coding] AWGN LLR helper has the correct sign convention\n");
+    /* A +1 sample favours bit 0 (positive LLR); -1 favours bit 1. */
+    CHECK(dsp_ldpc_awgn_llr(1.0, 0.5) > 0.0,
+          "+1 sample -> positive LLR (bit 0)");
+    CHECK(dsp_ldpc_awgn_llr(-1.0, 0.5) < 0.0,
+          "-1 sample -> negative LLR (bit 1)");
+}
+
 int main(void) {
-    printf("DSP STUDY GUIDE - test suite\n");
+    printf("DSP GUIDE - test suite\n");
     printf("============================\n\n");
 
     test_dft_fft_agree();
@@ -694,6 +901,18 @@ int main(void) {
     test_block_interleave_spreads_burst();
     test_block_interleave_rescues_rs();
     test_conv_interleaver_roundtrip();
+
+    test_ldpc_from_matrix();
+    test_ldpc_syndrome();
+    test_ldpc_regular_construction();
+    test_ldpc_regular_rejects_bad_params();
+    test_ldpc_bitflip_single_error();
+    test_ldpc_sumproduct_corrects();
+    test_ldpc_sumproduct_clean();
+    test_ldpc_minsum_corrects();
+    test_ldpc_ber_monotonic();
+    test_ldpc_minsum_beats_bitflip();
+    test_ldpc_awgn_llr_sign();
 
     test_lms_converges();
 

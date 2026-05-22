@@ -5,7 +5,6 @@ algorithms**, organised by category, with every module annotated with
 the problem it solves, its computational complexity, and the trade-offs
 versus its alternatives.
 
-
 ## Project layout
 
 ```
@@ -24,7 +23,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 49 unit tests
+│   └── test_all.c              <- 66 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -58,7 +57,7 @@ dependencies.
 | **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows |
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
-| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi; block & convolutional interleaving; LMS equalizer |
+| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving; LMS equalizer |
 
 ## Design notes
 
@@ -80,9 +79,15 @@ dependencies.
   table-driven CRC-32 (Ethernet polynomial).
 - **Forward error correction** implements Hamming(7,4) (syndrome
   decoding), Reed-Solomon over GF(2^8) (Berlekamp-Massey, Chien search,
-  Forney algorithm), and a rate-1/2 convolutional code with a Viterbi
-  decoder supporting both hard- and soft-decision metrics. LDPC and
-  Turbo codes are documented in the headers but not implemented.
+  Forney algorithm), a rate-1/2 convolutional code with a Viterbi
+  decoder supporting both hard- and soft-decision metrics, and LDPC
+  codes with two decoders. Turbo codes are documented but not coded.
+- **LDPC** is built on a sparse parity-check matrix (a Tanner graph),
+  with a regular-code generator and a fixed-matrix constructor. It
+  provides three decoders: hard-decision bit-flipping, exact
+  sum-product (belief propagation), and min-sum - the transcendental-
+  free approximation used in real 5G/Wi-Fi 6 hardware. A BER-sweep
+  helper measures any decoder over a simulated AWGN channel.
 - **Interleaving** provides block (R×C matrix) and convolutional
   (staggered delay lines) interleavers. These add no redundancy; they
   scatter burst errors so the FEC stage sees only correctable counts.
@@ -95,7 +100,7 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-49 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+66 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -105,5 +110,8 @@ round-trip, wavelet rejection of non-power-of-two lengths, parity and
 checksum detection, the CRC-32 standard test vector and burst
 detection, Hamming single-bit correction, Reed-Solomon burst
 correction, hard- and soft-decision Viterbi decoding, block and convolutional
-interleaver round-trips, interleaving-aided burst recovery, and LMS
-equalizer convergence.
+interleaver round-trips, interleaving-aided burst recovery, LDPC
+construction and syndrome checks, LDPC bit-flipping,
+sum-product and min-sum decoding, the BER-sweep noise monotonicity
+and the soft-beats-hard decoder ranking, and LMS equalizer
+convergence.

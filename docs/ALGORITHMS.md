@@ -114,9 +114,47 @@ Detection only flags an error — it enables a retransmission request
 FEC adds redundancy up front so the receiver repairs errors with no
 round-trip — essential for broadcast, storage, and real-time links.
 Reed-Solomon's symbol-level math is what makes it strong against bursts:
-a damaged symbol counts once however many of its bits flipped. LDPC and
-Turbo codes are described here for completeness; this guide implements
-Hamming, Reed-Solomon, and the convolutional/Viterbi pair.
+a damaged symbol counts once however many of its bits flipped. This
+guide implements Hamming, Reed-Solomon, the convolutional/Viterbi pair,
+and LDPC; Turbo codes are described for completeness but not coded.
+
+### LDPC codes
+
+| Decoder | Input | Strength | Cost |
+|---|---|---|---|
+| Bit-flipping | Hard bits | Weak — corrects few errors | Integer, one pass cheap |
+| Sum-product (BP) | Soft LLRs | Near Shannon limit | Iterative, tanh/atanh per edge |
+| Min-sum | Soft LLRs | Close to sum-product | Iterative, no transcendentals |
+
+An LDPC code is a *sparse* parity-check matrix H: a codeword c satisfies
+H·c = 0 over GF(2). H is best seen as a bipartite **Tanner graph** —
+variable nodes (code bits) on one side, check nodes (parity equations)
+on the other, an edge per 1 in H.
+
+Decoding passes messages along the graph edges. Bit-flipping passes hard
+votes: each failing check is unhappy with its bits, and the most-suspect
+bit is flipped each pass. Sum-product passes *probabilities* as
+log-likelihood ratios — variable and check nodes refine each other's
+belief every iteration. **Min-sum** keeps the same schedule but replaces
+the exact tanh check-node rule with a minimum-of-magnitudes
+approximation: no transcendental functions, fixed-point friendly, and —
+with a normalising scale factor around 0.75 — within a hair of
+sum-product. That is why min-sum is the decoder in real 5G and Wi-Fi 6
+silicon. Sum-product's use of the demodulator's soft confidence is what
+puts LDPC within a fraction of a decibel of the Shannon limit.
+
+Decoders are characterised by a **BER sweep**: transmit many codewords
+over a simulated AWGN channel at a range of noise levels and plot the
+bit-error rate. The curve drops steeply once the noise clears a
+threshold — the LDPC "waterfall". The sweep also makes the decoder
+ranking concrete: soft decoders (sum-product, min-sum) sit far below
+hard bit-flipping, and min-sum tracks sum-product closely.
+
+LDPC vs Reed-Solomon: RS gives a *hard guarantee* of t corrected symbols
+via exact algebra. LDPC offers *no such guarantee* — it is probabilistic
+— but on a noisy channel it corrects far more, far closer to the limit.
+The price is iterative decoding: more computation and some latency, the
+same trade-off the guide meets in FIR-vs-IIR and direct-vs-FFT.
 
 **Detection vs correction.** Detection is cheap but needs a feedback
 channel to be useful (request a resend). Correction spends more

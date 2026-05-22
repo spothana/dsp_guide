@@ -16,8 +16,8 @@
  *   wavelet/     - discrete wavelet transform (multi-resolution)
  *   coding/      - error detection (CRC, parity, checksum), forward
  *                  error correction (Hamming, Reed-Solomon,
- *                  convolutional/Viterbi), interleaving, and channel
- *                  equalization
+ *                  convolutional/Viterbi, LDPC), interleaving, and
+ *                  channel equalization
  *
  * Every module is annotated with: what problem it solves, its
  * computational complexity, and the trade-offs versus its alternatives.
@@ -45,6 +45,7 @@
 
 #include "coding/detect.h"
 #include "coding/correct.h"
+#include "coding/ldpc.h"
 #include "coding/interleave.h"
 #include "coding/equalize.h"
 

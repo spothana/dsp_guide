@@ -436,8 +436,98 @@ static void demo_interleaving(void) {
     dsp_conv_interleaver_free(&dtl);
 }
 
+/* ---- LDPC -------------------------------------------------------------- */
+
+static void demo_ldpc(void) {
+    section("LDPC CODES (near-Shannon-limit FEC)");
+
+    /* A small regular (wc=3, wr=4) LDPC code: n=12 bits, m=9 checks. */
+    dsp_ldpc code;
+    if (dsp_ldpc_make_regular(&code, 9, 12, 3, 4, 1) != 0) {
+        printf("  (code construction failed)\n");
+        return;
+    }
+    printf("Regular LDPC code: 12 variable nodes, 9 check nodes.\n");
+    printf("  every bit is in 3 checks; every check covers 4 bits.\n");
+    printf("  the sparse parity-check matrix H is a bipartite Tanner "
+           "graph.\n");
+
+    /* The all-zero word is always a valid codeword - use it as the
+     * transmitted codeword so the demo stays self-contained. */
+    uint8_t cw[12] = {0};
+    printf("\nTransmitted codeword satisfies every parity check: %s\n",
+           dsp_ldpc_check(&code, cw) ? "yes" : "no");
+
+    /* --- Bit-flipping decoder (hard decision) --- */
+    uint8_t hard[12];
+    for (int i = 0; i < 12; ++i) hard[i] = cw[i];
+    hard[5] ^= 1;                         /* one received bit flipped */
+    printf("\nBit-flipping decoder (hard decision):\n");
+    printf("  received word has syndrome weight %zu (a check fails)\n",
+           dsp_ldpc_syndrome_weight(&code, hard));
+    int bf_iter = dsp_ldpc_decode_bitflip(&code, hard, 40);
+    int bf_ok = 1;
+    for (int i = 0; i < 12; ++i) if (hard[i] != cw[i]) bf_ok = 0;
+    printf("  flipped the most-suspect bit each pass -> converged in "
+           "%d iteration(s)  %s\n", bf_iter,
+           bf_ok ? "(error corrected)" : "(FAIL)");
+
+    /* --- Sum-product decoder (soft decision) --- */
+    /* Channel LLRs: positive favours bit 0. Two bits arrive with the
+     * wrong sign - the demodulator was fooled - but with low
+     * confidence. Bit-flipping would see two hard errors; the
+     * sum-product decoder weighs the analog confidence instead. */
+    double llr[12];
+    for (int i = 0; i < 12; ++i) llr[i] = 3.0;   /* clean, favour 0 */
+    llr[2] = -1.0;                                /* wrong-sign, weak */
+    llr[8] = -0.8;                                /* wrong-sign, weak */
+
+    uint8_t soft[12];
+    int sp_iter = dsp_ldpc_decode_sumproduct(&code, llr, soft, 50);
+    int sp_ok = 1;
+    for (int i = 0; i < 12; ++i) if (soft[i] != cw[i]) sp_ok = 0;
+    printf("\nSum-product decoder (soft decision, belief propagation):\n");
+    printf("  variable and check nodes exchange probabilities (LLRs)\n");
+    printf("  along the Tanner-graph edges, refining belief each pass\n");
+    printf("  2 wrong-sign inputs -> converged in %d iteration(s)  %s\n",
+           sp_iter, sp_ok ? "(both errors corrected)" : "(FAIL)");
+
+    /* --- Min-sum decoder (the hardware approximation) --- */
+    uint8_t ms[12];
+    int ms_iter = dsp_ldpc_decode_minsum(&code, llr, ms, 0.75, 50);
+    int ms_ok = 1;
+    for (int i = 0; i < 12; ++i) if (ms[i] != cw[i]) ms_ok = 0;
+    printf("\nMin-sum decoder (normalised, scale 0.75):\n");
+    printf("  replaces the tanh rule with a plain minimum-of-magnitudes\n");
+    printf("  -> no transcendental functions, fixed-point friendly\n");
+    printf("  same 2 wrong-sign inputs -> converged in %d iteration(s)  %s\n",
+           ms_iter, ms_ok ? "(both errors corrected)" : "(FAIL)");
+
+    /* --- BER sweep: the three decoders over a noisy channel --- */
+    printf("\nBit-error rate over a simulated AWGN channel "
+           "(2000 codewords each):\n");
+    printf("  noise |  bit-flip | sum-product |   min-sum\n");
+    double noise_levels[3] = { 0.5, 0.7, 0.9 };
+    for (int k = 0; k < 3; ++k) {
+        double ns = noise_levels[k];
+        double bf = dsp_ldpc_ber_sweep(&code, DSP_LDPC_BITFLIP,
+                                       ns, 2000, 50, 2024);
+        double sp = dsp_ldpc_ber_sweep(&code, DSP_LDPC_SUMPRODUCT,
+                                       ns, 2000, 50, 2024);
+        double mn = dsp_ldpc_ber_sweep(&code, DSP_LDPC_MINSUM,
+                                       ns, 2000, 50, 2024);
+        printf("   %.1f  | %9.4f | %11.4f | %9.4f\n", ns, bf, sp, mn);
+    }
+    printf("-> sum-product and min-sum track each other closely, and\n");
+    printf("   both crush the hard-decision bit-flipper. Min-sum gets\n");
+    printf("   that performance without a single tanh - which is why\n");
+    printf("   it is the decoder in real 5G and Wi-Fi 6 silicon.\n");
+
+    dsp_ldpc_free(&code);
+}
+
 int main(void) {
-    printf("DSP STUDY GUIDE - annotated demo\n");
+    printf("DSP GUIDE - annotated demo\n");
     printf("C implementation of common digital signal processing algorithms.\n");
 
     demo_transforms();
@@ -448,6 +538,7 @@ int main(void) {
     demo_wavelet();
     demo_detection();
     demo_correction();
+    demo_ldpc();
     demo_interleaving();
     demo_equalization();
 
