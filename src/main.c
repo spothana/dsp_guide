@@ -236,6 +236,129 @@ static void demo_estimation(void) {
     printf("   classical FFT periodogram would blur into one lobe.\n");
 }
 
+/* ---- Time-frequency analysis ---------------------------------------- */
+
+static void demo_timefreq(void) {
+    section("TIME-FREQUENCY ANALYSIS (STFT, filter bank, Wigner-Ville)");
+
+    /* A linear chirp: a single tone whose frequency sweeps upward.
+     * The FFT alone would just show a smear of all those frequencies;
+     * time-frequency methods reveal the frequency RISING with time. */
+    enum { N = 512 };
+    double x[N];
+    for (int n = 0; n < N; ++n) {
+        /* Instantaneous frequency sweeps 0.05 -> 0.40. */
+        double phase = 2.0 * M_PI
+                     * (0.05 * n + 0.35 * 0.5 * n * n / N);
+        x[n] = cos(phase);
+    }
+    printf("Test signal: a linear chirp sweeping f = 0.05 -> 0.40.\n");
+    printf("A single FFT shows only that all those frequencies exist;\n");
+    printf("these methods show WHEN each one occurs.\n");
+
+    /* --- STFT / spectrogram --- */
+    dsp_stft s;
+    dsp_stft_forward(x, N, DSP_WIN_HANNING, 64, 16, &s);
+    double *spec = malloc(s.frames * s.bins * sizeof(double));
+    dsp_spectrogram(&s, spec);
+
+    printf("\nSTFT: %zu time frames x %zu frequency bins "
+           "(64-pt Hann window, hop 16)\n", s.frames, s.bins);
+    printf("  dominant frequency per frame (rising = chirp tracked):\n   ");
+    for (size_t t = 0; t < s.frames; t += 4) {
+        size_t pk = 1;
+        double mx = 0.0;
+        for (size_t f = 1; f < s.bins / 2; ++f)
+            if (spec[t * s.bins + f] > mx) {
+                mx = spec[t * s.bins + f];
+                pk = f;
+            }
+        printf(" %.2f", (double)pk / (double)s.bins);
+    }
+    printf("\n");
+
+    /* STFT is invertible: overlap-add reconstructs the signal. */
+    size_t slen = dsp_stft_signal_len(&s);
+    double *recon = malloc(slen * sizeof(double));
+    dsp_stft_inverse(&s, recon);
+    double err = 0.0;
+    int cnt = 0;
+    for (size_t i = 64; i < slen - 64 && i < (size_t)N; ++i) {
+        err += fabs(recon[i] - x[i]);
+        ++cnt;
+    }
+    printf("  overlap-add inverse: mean reconstruction error %.2e\n",
+           cnt ? err / cnt : 0.0);
+
+    /* --- QMF filter bank --- */
+    dsp_qmf_bank bank;
+    dsp_qmf_init(&bank);
+    double *lo = malloc((N / 2) * sizeof(double));
+    double *hi = malloc((N / 2) * sizeof(double));
+    double *qrec = malloc(N * sizeof(double));
+    dsp_qmf_analyze(&bank, x, N, lo, hi);
+    dsp_qmf_synthesize(&bank, lo, hi, N / 2, qrec);
+
+    /* Subband energies show how the chirp's energy splits low/high. */
+    double e_lo = 0.0, e_hi = 0.0;
+    for (int i = 0; i < N / 2; ++i) {
+        e_lo += lo[i] * lo[i];
+        e_hi += hi[i] * hi[i];
+    }
+    /* Reconstruction matches the input delayed by ntaps-1 samples. */
+    size_t delay = bank.ntaps - 1;
+    double qerr = 0.0;
+    int qcnt = 0;
+    for (size_t i = delay + 16; i + 16 < (size_t)N; ++i) {
+        qerr += fabs(qrec[i] - x[i - delay]);
+        ++qcnt;
+    }
+    printf("\nQMF filter bank: splits the signal into 2 subbands, "
+           "each\n  decimated by 2 (critical sampling - no extra "
+           "samples).\n");
+    printf("  subband energy: low = %.0f, high = %.0f\n", e_lo, e_hi);
+    printf("  analysis + synthesis reconstruction error: %.4f\n",
+           qcnt ? qerr / qcnt : 0.0);
+    printf("  -> the QMF mirror design cancels the aliasing from\n");
+    printf("     decimation, the basis of subband audio coding.\n");
+
+    /* --- Wigner-Ville --- */
+    enum { NW = 128 };
+    double xw[NW];
+    for (int n = 0; n < NW; ++n) {
+        double phase = 2.0 * M_PI
+                     * (0.10 * n + 0.30 * 0.5 * n * n / NW);
+        xw[n] = cos(phase);
+    }
+    double *wvd = malloc(NW * NW * sizeof(double));
+    dsp_wigner_ville(xw, NW, wvd);
+
+    printf("\nWigner-Ville distribution: the sharpest time-frequency\n");
+    printf("  resolution of any method here, with no window needed.\n");
+    printf("  chirp ridge - instantaneous frequency per time slice:\n   ");
+    for (int t = 16; t < NW; t += 16) {
+        int pk = 0;
+        double mx = -1e30;
+        for (int f = 0; f < NW; ++f)
+            if (wvd[t * NW + f] > mx) {
+                mx = wvd[t * NW + f];
+                pk = f;
+            }
+        /* The WVD frequency axis spans [0, 0.5) over NW bins. */
+        printf(" %.2f", (double)pk / (2.0 * NW));
+    }
+    printf("\n");
+    printf("  -> the ridge tracks the sweep tightly; for a signal with\n");
+    printf("     several components the WVD also shows spurious cross\n");
+    printf("     terms midway between them - its defining drawback,\n");
+    printf("     which the pseudo-WVD smooths away.\n");
+
+    dsp_stft_free(&s);
+    dsp_qmf_free(&bank);
+    free(spec); free(recon);
+    free(lo); free(hi); free(qrec); free(wvd);
+}
+
 /* ---- Sample rate conversion ----------------------------------------- */
 
 static void demo_sampling(void) {
@@ -1004,6 +1127,7 @@ int main(void) {
     demo_operations();
     demo_spectral();
     demo_estimation();
+    demo_timefreq();
     demo_sampling();
     demo_wavelet();
     demo_detection();

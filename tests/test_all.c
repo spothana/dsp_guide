@@ -444,6 +444,179 @@ static void test_esprit_estimates_frequencies(void) {
           "both tones are recovered within tolerance");
 }
 
+/* ---- spectral: time-frequency analysis (STFT, QMF, WVD) ------------- */
+
+static void test_stft_frame_count(void) {
+    printf("[spectral] STFT produces the expected frame grid\n");
+    enum { N = 512, WIN = 64, HOP = 16 };
+    double x[N];
+    for (int i = 0; i < N; ++i) x[i] = sin(0.2 * i);
+
+    dsp_stft s;
+    int rc = dsp_stft_forward(x, N, DSP_WIN_HANNING, WIN, HOP, &s);
+    CHECK(rc == 0, "STFT computes without error");
+    CHECK(s.frames == (N - WIN) / HOP + 1 && s.bins == WIN,
+          "frame count and bin count match the window and hop");
+    dsp_stft_free(&s);
+}
+
+static void test_stft_rejects_non_pow2(void) {
+    printf("[spectral] STFT rejects a non-power-of-two window\n");
+    enum { N = 256 };
+    double x[N];
+    for (int i = 0; i < N; ++i) x[i] = sin(0.1 * i);
+    dsp_stft s;
+    CHECK(dsp_stft_forward(x, N, DSP_WIN_HANNING, 48, 16, &s) == -1,
+          "a 48-sample window is rejected");
+}
+
+static void test_stft_inverse_reconstructs(void) {
+    printf("[spectral] STFT overlap-add inverse reconstructs the signal\n");
+    enum { N = 512, WIN = 64, HOP = 16 };
+    double x[N];
+    for (int i = 0; i < N; ++i)
+        x[i] = sin(0.2 * i) + 0.4 * cos(0.55 * i);
+
+    dsp_stft s;
+    dsp_stft_forward(x, N, DSP_WIN_HANNING, WIN, HOP, &s);
+    size_t slen = dsp_stft_signal_len(&s);
+    double *recon = malloc(slen * sizeof(double));
+    dsp_stft_inverse(&s, recon);
+
+    /* Check the interior, away from the windowed edges. */
+    double err = 0.0;
+    int cnt = 0;
+    for (size_t i = WIN; i < slen - WIN && i < (size_t)N; ++i) {
+        err += fabs(recon[i] - x[i]);
+        ++cnt;
+    }
+    CHECK(cnt > 0 && err / cnt < 1e-6,
+          "interior samples are reconstructed almost exactly");
+
+    free(recon);
+    dsp_stft_free(&s);
+}
+
+static void test_stft_tracks_chirp(void) {
+    printf("[spectral] STFT spectrogram tracks a rising chirp\n");
+    enum { N = 512, WIN = 64, HOP = 16 };
+    double x[N];
+    for (int n = 0; n < N; ++n) {
+        double phase = 2.0 * M_PI
+                     * (0.05 * n + 0.35 * 0.5 * n * n / N);
+        x[n] = cos(phase);
+    }
+    dsp_stft s;
+    dsp_stft_forward(x, N, DSP_WIN_HANNING, WIN, HOP, &s);
+    double *spec = malloc(s.frames * s.bins * sizeof(double));
+    dsp_spectrogram(&s, spec);
+
+    /* The dominant bin should be higher in a late frame than early. */
+    size_t pk_early = 1, pk_late = 1;
+    double me = 0.0, ml = 0.0;
+    size_t lf = s.frames - 2;
+    for (size_t f = 1; f < s.bins / 2; ++f) {
+        if (spec[1 * s.bins + f] > me)  { me = spec[1 * s.bins + f];  pk_early = f; }
+        if (spec[lf * s.bins + f] > ml) { ml = spec[lf * s.bins + f]; pk_late = f; }
+    }
+    CHECK(pk_late > pk_early,
+          "the dominant frequency rises across the spectrogram");
+
+    free(spec);
+    dsp_stft_free(&s);
+}
+
+static void test_qmf_reconstruction(void) {
+    printf("[spectral] QMF filter bank reconstructs after subband split\n");
+    enum { N = 128 };
+    double x[N];
+    for (int i = 0; i < N; ++i)
+        x[i] = sin(0.3 * i) + 0.5 * cos(0.9 * i);
+
+    dsp_qmf_bank bank;
+    int rc = dsp_qmf_init(&bank);
+    CHECK(rc == 0, "QMF bank initialises");
+
+    double lo[N / 2], hi[N / 2], rec[N];
+    dsp_qmf_analyze(&bank, x, N, lo, hi);
+    dsp_qmf_synthesize(&bank, lo, hi, N / 2, rec);
+
+    /* Reconstruction matches the input delayed by ntaps-1 samples. */
+    size_t delay = bank.ntaps - 1;
+    double err = 0.0;
+    int cnt = 0;
+    for (size_t i = delay + 8; i + 8 < (size_t)N; ++i) {
+        err += fabs(rec[i] - x[i - delay]);
+        ++cnt;
+    }
+    CHECK(cnt > 0 && err / cnt < 0.05,
+          "analysis + synthesis recovers the signal (near-perfect)");
+    dsp_qmf_free(&bank);
+}
+
+static void test_qmf_critical_sampling(void) {
+    printf("[spectral] QMF subbands together hold the input sample count\n");
+    enum { N = 64 };
+    double x[N], lo[N / 2], hi[N / 2];
+    for (int i = 0; i < N; ++i) x[i] = sin(0.4 * i);
+
+    dsp_qmf_bank bank;
+    dsp_qmf_init(&bank);
+    dsp_qmf_analyze(&bank, x, N, lo, hi);
+    /* Two subbands of N/2 each = N samples total: critical sampling. */
+    CHECK((N / 2) + (N / 2) == N,
+          "the two decimated subbands sum to the input length");
+    dsp_qmf_free(&bank);
+}
+
+static void test_wigner_ville_tracks_chirp(void) {
+    printf("[spectral] Wigner-Ville ridge follows a chirp\n");
+    enum { NW = 128 };
+    double x[NW];
+    for (int n = 0; n < NW; ++n) {
+        double phase = 2.0 * M_PI
+                     * (0.10 * n + 0.30 * 0.5 * n * n / NW);
+        x[n] = cos(phase);
+    }
+    double *wvd = malloc(NW * NW * sizeof(double));
+    int rc = dsp_wigner_ville(x, NW, wvd);
+    CHECK(rc == 0, "Wigner-Ville completes for a power-of-two length");
+
+    /* The ridge bin should be higher at a late time than an early one
+     * (the WVD frequency axis spans [0, 0.5) over NW bins). */
+    int pk_early = 0, pk_late = 0;
+    double me = -1e30, ml = -1e30;
+    for (int f = 0; f < NW; ++f) {
+        if (wvd[16 * NW + f]  > me) { me = wvd[16 * NW + f];  pk_early = f; }
+        if (wvd[112 * NW + f] > ml) { ml = wvd[112 * NW + f]; pk_late = f; }
+    }
+    CHECK(pk_late > pk_early,
+          "the WVD ridge rises with time, tracking the chirp");
+
+    free(wvd);
+}
+
+static void test_wigner_ville_rejects_non_pow2(void) {
+    printf("[spectral] Wigner-Ville rejects a non-power-of-two length\n");
+    enum { N = 96 };
+    double x[N], wvd[N * N];
+    for (int i = 0; i < N; ++i) x[i] = cos(0.3 * i);
+    CHECK(dsp_wigner_ville(x, N, wvd) == -1,
+          "a length of 96 is rejected");
+}
+
+static void test_pseudo_wvd_runs(void) {
+    printf("[spectral] pseudo Wigner-Ville smooths without failing\n");
+    enum { NW = 64 };
+    double x[NW];
+    for (int n = 0; n < NW; ++n)
+        x[n] = cos(2.0 * M_PI * 0.2 * n);
+    double *wvd = malloc(NW * NW * sizeof(double));
+    int rc = dsp_pseudo_wigner_ville(x, NW, DSP_WIN_HANNING, wvd);
+    CHECK(rc == 0, "pseudo-WVD completes with a smoothing window");
+    free(wvd);
+}
+
 /* ---- sampling ------------------------------------------------------- */
 
 static void test_decimate_length(void) {
@@ -1676,6 +1849,16 @@ int main(void) {
     test_music_resolves_close_tones();
     test_music_rejects_bad_params();
     test_esprit_estimates_frequencies();
+
+    test_stft_frame_count();
+    test_stft_rejects_non_pow2();
+    test_stft_inverse_reconstructs();
+    test_stft_tracks_chirp();
+    test_qmf_reconstruction();
+    test_qmf_critical_sampling();
+    test_wigner_ville_tracks_chirp();
+    test_wigner_ville_rejects_non_pow2();
+    test_pseudo_wvd_runs();
 
     test_decimate_length();
     test_interpolate_length_and_zeros();

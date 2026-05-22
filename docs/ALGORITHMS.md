@@ -104,6 +104,50 @@ These methods are the workhorses of radar and sonar, array signal
 processing (direction-of-arrival estimation), tone detection, and speech
 analysis — anywhere the FFT's resolution falls short.
 
+## Time-frequency analysis
+
+Both the FFT and the estimators above produce one spectrum for the whole
+signal. But speech, music, and radar chirps are *non-stationary* — their
+frequency content changes over time. Time-frequency analysis recovers
+the missing time axis: it shows *when* each frequency occurs.
+
+| Method | Resolution | Cross terms | Invertible | Best for |
+|---|---|---|---|---|
+| STFT | Fixed (window-set) | None | Yes | Speech, audio, general purpose |
+| Filter bank | Flexible tiling | None | Yes | Compression, multirate, channelizers |
+| Wigner-Ville | Very high | Strong | Yes (with care) | Chirps, transients, high-resolution work |
+| Wavelet (DWT) | Multi-scale | Low | Yes | Transients, denoising (see wavelet/) |
+
+The **STFT** slides a short window along the signal and FFTs each piece;
+the squared magnitude is the spectrogram. It is simple, invertible by
+overlap-add, and real-time capable. Its one limitation is a *fixed*
+resolution — the window length sets a single time/frequency trade-off
+for all frequencies (the time-frequency uncertainty principle): a short
+window localises time well but frequency poorly, and a long window does
+the reverse.
+
+A **filter bank** splits the signal into frequency subbands with a set
+of bandpass filters, processes each band, then reconstructs. The
+two-channel quadrature-mirror-filter (QMF) bank here decimates each of
+its low and high subbands by two, so the total sample count is unchanged
+(critical sampling). The QMF mirror relation between the analysis and
+synthesis filters makes the aliasing from that decimation cancel,
+giving near-perfect reconstruction. This subband structure underlies
+audio codecs (MP3, AAC) and communications channelizers. (The guide's
+wavelet transform is itself a wavelet filter bank.)
+
+The **Wigner-Ville distribution** is quadratic, not a linear transform:
+it is the Fourier transform of the signal's instantaneous
+autocorrelation. It achieves the sharpest time-frequency localisation of
+any method here, with no window at all — but for a multi-component
+signal it shows **cross terms**: oscillating artefacts midway between
+every pair of true components. That is its defining drawback. The
+pseudo-WVD applies a smoothing window along the lag axis to suppress
+those cross terms, trading some resolution for a cleaner picture. The
+implementation works on the analytic signal, which halves the cross
+terms and removes the frequency aliasing of a real input; its frequency
+axis spans [0, 0.5) across N bins.
+
 ## Sample rate conversion
 
 | Operation | Effect | Filter placement |
