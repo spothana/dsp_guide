@@ -12,8 +12,9 @@
  *   filtering/   - FIR, IIR               (frequency-selective filters)
  *   operations/  - convolution, correlation
  *   spectral/    - window functions, advanced spectral estimation
- *                  (AR, ARMA, MUSIC, ESPRIT), and time-frequency
- *                  analysis (STFT, QMF filter bank, Wigner-Ville)
+ *                  (AR, ARMA, MUSIC, ESPRIT), time-frequency analysis
+ *                  (STFT, QMF filter bank, Wigner-Ville), and
+ *                  cepstral analysis (cepstrum, MFCC)
  *   sampling/    - decimation, interpolation, rational resampling
  *   wavelet/     - discrete wavelet transform (multi-resolution)
  *   coding/      - error detection (CRC, parity, checksum) and
@@ -52,6 +53,7 @@
 #include "spectral/window.h"
 #include "spectral/estimation.h"
 #include "spectral/timefreq.h"
+#include "spectral/cepstrum.h"
 
 #include "sampling/resample.h"
 

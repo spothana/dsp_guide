@@ -17,7 +17,8 @@ dsp_guide/
 │   ├── filtering/              <- fir, iir
 │   ├── operations/             <- convolution, correlation
 │   ├── spectral/               <- windows, AR/ARMA/MUSIC/ESPRIT,
-│   │                              STFT/filter-bank/Wigner-Ville
+│   │                              STFT/filter-bank/Wigner-Ville,
+│   │                              cepstrum & MFCC
 │   ├── sampling/               <- decimation, interpolation, resampling
 │   ├── wavelet/                <- discrete wavelet transform
 │   ├── coding/                 <- error detection, FEC, interleaving
@@ -30,7 +31,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 163 unit tests
+│   └── test_all.c              <- 174 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -61,7 +62,7 @@ dependencies.
 | **Frequency-domain transforms** | DFT, FFT (radix-2 Cooley-Tukey), DCT-II/III, Hilbert transform |
 | **Digital filtering** | FIR (windowed-sinc design), IIR (biquad, RBJ design) |
 | **Signal operations** | Convolution (direct + FFT), cross/auto-correlation |
-| **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows; advanced estimation (AR via Yule-Walker & Burg, ARMA, MUSIC, ESPRIT); time-frequency analysis (STFT/spectrogram, QMF filter bank, Wigner-Ville) |
+| **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows; advanced estimation (AR via Yule-Walker & Burg, ARMA, MUSIC, ESPRIT); time-frequency analysis (STFT/spectrogram, QMF filter bank, Wigner-Ville); cepstral analysis (real & complex cepstrum, MFCC) |
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
 | **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving |
@@ -100,6 +101,11 @@ dependencies.
   (sliding-window FFT, spectrogram, overlap-add inverse), a
   two-channel QMF filter bank with near-perfect reconstruction, and the
   Wigner-Ville distribution (with a pseudo-WVD smoothing variant).
+- **Cepstral analysis** transforms the log spectrum: a real cepstrum
+  (pitch detection by the high-quefrency peak), an invertible complex
+  cepstrum (phase unwrapped, for homomorphic deconvolution), and MFCCs
+  - power spectrum, mel-scale triangular filterbank, log, then DCT -
+  the standard speech / audio recognition feature.
 - **Error detection** covers parity, the 16-bit Internet checksum, and
   table-driven CRC-32 (Ethernet polynomial).
 - **Forward error correction** implements Hamming(7,4) (syndrome
@@ -152,7 +158,7 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-163 tests covering: DFT/FFT agreement, FFT and DCT round-trips, Hilbert
+174 tests covering: DFT/FFT agreement, FFT and DCT round-trips, Hilbert
 transform / envelope / instantaneous-frequency accuracy, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
@@ -175,7 +181,9 @@ Kalman tracking / sensor fusion and EKF nonlinear tracking,
 advanced spectral estimation (AR/Burg model recovery, ARMA, and
 MUSIC/ESPRIT resolving closely spaced tones), time-frequency analysis
 (STFT chirp tracking and exact overlap-add inverse, QMF reconstruction,
-Wigner-Ville ridge tracking), the image module,
+Wigner-Ville ridge tracking), cepstral analysis (pitch detection,
+complex-cepstrum round-trip, and MFCC sound discrimination), the
+image module,
 and array processing (steering vectors, Hermitian covariance,
 beamforming, and MUSIC/ESPRIT direction finding) - 2-D FFT/DCT/wavelet round-trips, 8x8
 DCT compaction, spatial filters, the median filter, histograms, and

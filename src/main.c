@@ -427,6 +427,91 @@ static void demo_timefreq(void) {
     free(lo); free(hi); free(qrec); free(wvd);
 }
 
+/* ---- Cepstral analysis ---------------------------------------------- */
+
+static void demo_cepstrum(void) {
+    section("CEPSTRAL ANALYSIS (cepstrum & MFCC)");
+
+    printf("Cepstral analysis transforms the LOG SPECTRUM as if it\n");
+    printf("were a signal. Convolution becomes addition, so a source\n");
+    printf("and the filter shaping it land at different 'quefrencies'\n");
+    printf("and can be separated.\n");
+
+    /* --- Pitch detection via the real cepstrum --- */
+    enum { N = 1024 };
+    int period = 96;                       /* a pitch period in samples */
+    double x[N];
+    for (int n = 0; n < N; ++n) {
+        /* A buzzy, periodic signal: harmonics of one pitch. */
+        double s = 0.0;
+        for (int h = 1; h <= 10; ++h)
+            s += cos(2.0 * M_PI * h * n / period);
+        x[n] = s;
+    }
+    size_t found = dsp_cepstrum_pitch(x, N, 20, 400);
+    printf("\nPitch detection (real cepstrum):\n");
+    printf("  a periodic signal with a %d-sample pitch period\n", period);
+    printf("  cepstral peak found at quefrency %zu samples\n", found);
+    printf("  -> the pitch is a sharp peak at HIGH quefrency, well\n");
+    printf("     clear of the spectral-envelope region near zero.\n");
+
+    /* --- Complex cepstrum is invertible --- */
+    double sig[N], recon[N];
+    for (int n = 0; n < N; ++n)
+        sig[n] = cos(0.10 * n) + 0.5 * sin(0.37 * n)
+               + 0.3 * cos(0.02 * n);
+    cplx *ccep = malloc(N * sizeof(cplx));
+    dsp_cepstrum_complex(sig, N, ccep);
+    dsp_icepstrum_complex(ccep, N, recon);
+    double rt_err = 0.0;
+    for (int n = 0; n < N; ++n)
+        rt_err += fabs(recon[n] - sig[n]);
+    printf("\nComplex cepstrum:\n");
+    printf("  keeps phase, so it is invertible - round-trip error "
+           "%.1e\n", rt_err / N);
+    printf("  -> this invertibility is what enables homomorphic\n");
+    printf("     deconvolution (separating a signal from an echo).\n");
+    free(ccep);
+
+    /* --- MFCC: the speech-recognition feature --- */
+    enum { NFFT = 512, NFILT = 26, NCEP = 13 };
+    double sr = 16000.0;
+    dsp_mel_filterbank fb;
+    dsp_mel_filterbank_init(&fb, NFILT, NFFT, sr);
+
+    /* Two distinct "sounds": energy in different frequency bands. */
+    double low[NFFT], high[NFFT];
+    for (int n = 0; n < NFFT; ++n) {
+        low[n]  = cos(2.0 * M_PI * 500.0  * n / sr)
+                + 0.5 * cos(2.0 * M_PI * 1000.0 * n / sr);
+        high[n] = cos(2.0 * M_PI * 3000.0 * n / sr)
+                + 0.5 * cos(2.0 * M_PI * 4000.0 * n / sr);
+    }
+    double mfcc_lo[NCEP], mfcc_hi[NCEP];
+    dsp_mfcc(low,  NFFT, &fb, NCEP, mfcc_lo);
+    dsp_mfcc(high, NFFT, &fb, NCEP, mfcc_hi);
+
+    double dist = 0.0;
+    for (int c = 1; c < NCEP; ++c) {       /* skip c0 (log-energy) */
+        double d = mfcc_lo[c] - mfcc_hi[c];
+        dist += d * d;
+    }
+    printf("\nMFCC (mel-frequency cepstral coefficients):\n");
+    printf("  the dominant feature for speech / audio recognition.\n");
+    printf("  pipeline: power spectrum -> %d-band mel filterbank ->\n",
+           NFILT);
+    printf("            log -> DCT, keeping %d coefficients\n", NCEP);
+    printf("  low-band sound,  first 4 MFCCs: %.1f %.1f %.1f %.1f\n",
+           mfcc_lo[0], mfcc_lo[1], mfcc_lo[2], mfcc_lo[3]);
+    printf("  high-band sound, first 4 MFCCs: %.1f %.1f %.1f %.1f\n",
+           mfcc_hi[0], mfcc_hi[1], mfcc_hi[2], mfcc_hi[3]);
+    printf("  spectral-shape distance between them: %.1f\n", sqrt(dist));
+    printf("  -> the mel filterbank mimics the ear's resolution; the\n");
+    printf("     MFCCs compactly capture what makes sounds different.\n");
+
+    dsp_mel_filterbank_free(&fb);
+}
+
 /* ---- Sample rate conversion ----------------------------------------- */
 
 static void demo_sampling(void) {
@@ -1379,6 +1464,7 @@ int main(void) {
     demo_spectral();
     demo_estimation();
     demo_timefreq();
+    demo_cepstrum();
     demo_sampling();
     demo_wavelet();
     demo_detection();

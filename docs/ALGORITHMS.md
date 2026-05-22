@@ -161,6 +161,45 @@ implementation works on the analytic signal, which halves the cross
 terms and removes the frequency aliasing of a real input; its frequency
 axis spans [0, 0.5) across N bins.
 
+## Cepstral analysis
+
+Every method above transforms a signal *once*. The cepstrum goes a step
+further: it treats the *log spectrum* as a signal and transforms that
+again. The name is "spectrum" with the first syllable reversed, and its
+axis — "quefrency", an anagram of frequency — is measured in samples.
+
+The point is **source/filter separation**. Many signals are a source
+convolved with a filter (voiced speech: a glottal buzz shaped by the
+vocal tract; an echo: a signal convolved with a delayed impulse).
+Convolution multiplies spectra, the log turns that product into a sum,
+and a final transform sends the slowly varying filter to *low*
+quefrency and the fast source periodicity to a sharp peak at *high*
+quefrency. Two things tangled together in the signal sit apart in the
+cepstrum.
+
+| Variant | Uses | Invertible | For |
+|---|---|---|---|
+| Real cepstrum | log-magnitude only | No | Pitch detection, echo detection |
+| Complex cepstrum | log-magnitude + unwrapped phase | Yes | Homomorphic deconvolution |
+| MFCC | mel filterbank + log + DCT | No | Speech / audio recognition |
+
+The **real cepstrum** is `IFFT(log|FFT(x)|)`. Pitch detection reads off
+the high-quefrency peak: a periodic signal of period P produces a sharp
+cepstral peak at quefrency P. The **complex cepstrum** keeps the phase —
+which must be *unwrapped* first, removing the ±2π jumps that `arg()`
+introduces, or the inverse transform is meaningless — and so it can be
+inverted, which is what makes homomorphic deconvolution possible.
+
+**MFCC** (mel-frequency cepstral coefficients) is the dominant feature
+for speech and audio recognition. It is a cepstrum with two changes that
+mimic human hearing: the power spectrum is grouped by a *mel-scale*
+triangular filterbank (fine resolution at low frequency, coarse at high,
+as the ear does), and the final transform is a DCT rather than an
+inverse FFT — which also decorrelates the coefficients. The first dozen
+MFCCs capture the spectral envelope, the shape that distinguishes one
+sound from another, compactly. MFCC is normally computed per short frame
+(like the STFT); the routine here takes one frame, and the caller loops.
+
 ## Sample rate conversion
 
 | Operation | Effect | Filter placement |

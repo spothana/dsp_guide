@@ -713,6 +713,141 @@ static void test_pseudo_wvd_runs(void) {
     free(wvd);
 }
 
+/* ---- spectral: cepstral analysis (cepstrum & MFCC) ------------------ */
+
+static void test_cepstrum_real_runs(void) {
+    printf("[spectral] real cepstrum computes a finite result\n");
+    enum { N = 512 };
+    double x[N], cep[N];
+    for (int i = 0; i < N; ++i)
+        x[i] = cos(0.2 * i) + 0.4 * sin(0.55 * i);
+    int rc = dsp_cepstrum_real(x, N, cep);
+    CHECK(rc == 0, "the real cepstrum completes");
+
+    int finite = 1;
+    for (int i = 0; i < N; ++i)
+        if (!(cep[i] > -1e290 && cep[i] < 1e290)) finite = 0;
+    CHECK(finite, "every cepstral value is finite");
+}
+
+static void test_cepstrum_rejects_non_pow2(void) {
+    printf("[spectral] cepstrum rejects a non-power-of-two length\n");
+    enum { N = 100 };
+    double x[N], cep[N];
+    for (int i = 0; i < N; ++i) x[i] = cos(0.1 * i);
+    CHECK(dsp_cepstrum_real(x, N, cep) == -1,
+          "a length of 100 is rejected");
+}
+
+static void test_cepstrum_detects_pitch(void) {
+    printf("[spectral] the real cepstrum detects a periodic pitch\n");
+    enum { N = 1024 };
+    int period = 96;
+    double x[N];
+    for (int n = 0; n < N; ++n) {
+        double s = 0.0;
+        for (int h = 1; h <= 10; ++h)
+            s += cos(2.0 * M_PI * h * n / period);
+        x[n] = s;
+    }
+    size_t q = dsp_cepstrum_pitch(x, N, 20, 400);
+    /* The cepstral peak sits at the pitch period (allow +/-2). */
+    CHECK(q >= (size_t)(period - 2) && q <= (size_t)(period + 2),
+          "the detected quefrency matches the true pitch period");
+}
+
+static void test_complex_cepstrum_roundtrip(void) {
+    printf("[spectral] complex cepstrum reconstructs the signal\n");
+    enum { N = 512 };
+    double x[N], recon[N];
+    for (int n = 0; n < N; ++n)
+        x[n] = cos(0.10 * n) + 0.5 * sin(0.37 * n)
+             + 0.3 * cos(0.02 * n);
+
+    cplx *cep = malloc(N * sizeof(cplx));
+    int rc1 = dsp_cepstrum_complex(x, N, cep);
+    int rc2 = dsp_icepstrum_complex(cep, N, recon);
+    CHECK(rc1 == 0 && rc2 == 0, "forward and inverse both complete");
+
+    double err = 0.0;
+    for (int n = 0; n < N; ++n)
+        err += fabs(recon[n] - x[n]);
+    CHECK(err / N < 1e-6,
+          "the complex cepstrum round-trip is near-exact");
+    free(cep);
+}
+
+static void test_mel_filterbank_builds(void) {
+    printf("[spectral] mel filterbank builds with valid weights\n");
+    dsp_mel_filterbank fb;
+    int rc = dsp_mel_filterbank_init(&fb, 20, 256, 16000.0);
+    CHECK(rc == 0, "the mel filterbank initialises");
+
+    /* Every triangular weight is in [0, 1], and the bank is nonzero. */
+    size_t nbins = 256 / 2 + 1;
+    int valid = 1;
+    double total = 0.0;
+    for (size_t i = 0; i < fb.nfilters * nbins; ++i) {
+        double w = fb.weights[i];
+        if (w < -1e-9 || w > 1.0 + 1e-9) valid = 0;
+        total += w;
+    }
+    CHECK(valid && total > 0.0,
+          "filter weights lie in [0,1] and the bank is nonzero");
+    dsp_mel_filterbank_free(&fb);
+}
+
+static void test_mfcc_distinguishes_sounds(void) {
+    printf("[spectral] MFCCs differ for spectrally different sounds\n");
+    enum { NFFT = 512, NFILT = 26, NCEP = 13 };
+    double sr = 16000.0;
+    dsp_mel_filterbank fb;
+    dsp_mel_filterbank_init(&fb, NFILT, NFFT, sr);
+
+    /* Two sounds with energy in different frequency bands. */
+    double low[NFFT], high[NFFT];
+    for (int n = 0; n < NFFT; ++n) {
+        low[n]  = cos(2.0 * M_PI * 500.0  * n / sr);
+        high[n] = cos(2.0 * M_PI * 3500.0 * n / sr);
+    }
+    double mlo[NCEP], mhi[NCEP];
+    int rc1 = dsp_mfcc(low,  NFFT, &fb, NCEP, mlo);
+    int rc2 = dsp_mfcc(high, NFFT, &fb, NCEP, mhi);
+    CHECK(rc1 == 0 && rc2 == 0, "both MFCC computations complete");
+
+    /* The shape coefficients (skipping c0 = log-energy) must differ. */
+    double dist = 0.0;
+    for (int c = 1; c < NCEP; ++c) {
+        double d = mlo[c] - mhi[c];
+        dist += d * d;
+    }
+    CHECK(sqrt(dist) > 1.0,
+          "the two sounds give clearly different MFCC vectors");
+    dsp_mel_filterbank_free(&fb);
+}
+
+static void test_mfcc_repeatable(void) {
+    printf("[spectral] MFCCs are identical for the same input\n");
+    enum { NFFT = 256, NFILT = 20, NCEP = 12 };
+    dsp_mel_filterbank fb;
+    dsp_mel_filterbank_init(&fb, NFILT, NFFT, 16000.0);
+
+    double frame[NFFT];
+    for (int n = 0; n < NFFT; ++n)
+        frame[n] = cos(2.0 * M_PI * 0.05 * n)
+                 + 0.3 * cos(2.0 * M_PI * 0.18 * n);
+
+    double a[NCEP], b[NCEP];
+    dsp_mfcc(frame, NFFT, &fb, NCEP, a);
+    dsp_mfcc(frame, NFFT, &fb, NCEP, b);
+
+    int same = 1;
+    for (int c = 0; c < NCEP; ++c)
+        if (!close(a[c], b[c], 1e-12)) same = 0;
+    CHECK(same, "the same frame yields the same MFCCs");
+    dsp_mel_filterbank_free(&fb);
+}
+
 /* ---- sampling ------------------------------------------------------- */
 
 static void test_decimate_length(void) {
@@ -2302,6 +2437,14 @@ int main(void) {
     test_wigner_ville_tracks_chirp();
     test_wigner_ville_rejects_non_pow2();
     test_pseudo_wvd_runs();
+
+    test_cepstrum_real_runs();
+    test_cepstrum_rejects_non_pow2();
+    test_cepstrum_detects_pitch();
+    test_complex_cepstrum_roundtrip();
+    test_mel_filterbank_builds();
+    test_mfcc_distinguishes_sounds();
+    test_mfcc_repeatable();
 
     test_decimate_length();
     test_interpolate_length_and_zeros();
