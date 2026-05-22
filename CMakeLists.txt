@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(DSP_Study_Guide C)
+project(DSP_Guide C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ file(GLOB_RECURSE DSP_SOURCES
     src/spectral/*.c
     src/sampling/*.c
     src/wavelet/*.c
+    src/coding/*.c
 )
 
 # -- Shared library (all DSP implementations) ---------------------------------
@@ -39,5 +40,5 @@ foreach(TEST_SRC ${TEST_SOURCES})
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endforeach()
 
-message(STATUS "DSP Study Guide -- ${CMAKE_BUILD_TYPE} build")
+message(STATUS "DSP Guide -- ${CMAKE_BUILD_TYPE} build")
 message(STATUS "Sources found: ${DSP_SOURCES}")

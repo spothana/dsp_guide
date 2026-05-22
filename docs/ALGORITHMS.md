@@ -84,3 +84,57 @@ The wavelet transform trades some frequency precision for time
 localisation, with adaptive resolution (fine timing at high frequency,
 fine frequency at low). Stationary signal → FFT. Time-varying spectrum
 (speech, ECG, seismic) → wavelets.
+
+## Error control coding
+
+Reliable digital communication: detect, or correct, the bit errors that
+noise and channel distortion introduce.
+
+### Error detection
+
+| Technique | Redundancy | Catches | Use when |
+|---|---|---|---|
+| Parity | 1 bit | Any odd number of bit flips | Cheapest possible check |
+| Checksum | 16 bits | General corruption | TCP/IP packets; weak vs multi-bit |
+| CRC-32 | 32 bits | Burst errors | Ethernet, storage, wireless frames |
+
+Detection only flags an error — it enables a retransmission request
+(ARQ). It cannot repair anything.
+
+### Forward error correction
+
+| Code | Granularity | Corrects | Decoder | Use when |
+|---|---|---|---|---|
+| Hamming(7,4) | bit | 1-bit error / 2-bit detect | Syndrome lookup | ECC memory, satellite |
+| Reed-Solomon | symbol | t symbol errors, n−k=2t | Berlekamp-Massey | CD/DVD, QR codes, DVB |
+| Convolutional | bit stream | Scattered errors | Viterbi (trellis) | GSM, deep space |
+| LDPC | bit | Near Shannon limit | Iterative belief propagation | 5G, Wi-Fi 6 |
+| Turbo | bit | Near Shannon limit | Iterative (two decoders) | 4G LTE, deep space |
+
+FEC adds redundancy up front so the receiver repairs errors with no
+round-trip — essential for broadcast, storage, and real-time links.
+Reed-Solomon's symbol-level math is what makes it strong against bursts:
+a damaged symbol counts once however many of its bits flipped. LDPC and
+Turbo codes are described here for completeness; this guide implements
+Hamming, Reed-Solomon, and the convolutional/Viterbi pair.
+
+**Detection vs correction.** Detection is cheap but needs a feedback
+channel to be useful (request a resend). Correction spends more
+bandwidth on redundancy but needs no round-trip. Real systems often
+combine them (hybrid ARQ): FEC handles common errors, a CRC catches the
+rare residue and triggers a resend.
+
+### DSP's role in error handling
+
+| Function | What it does |
+|---|---|
+| Channel equalization | Adaptive filter (LMS/RLS) inverts channel distortion before decoding |
+| Soft-decision decoding | Decoder uses analog confidence, not hard 0/1 — ~2 dB coding gain |
+| Interleaving | Scatters burst errors across codewords so each is correctable |
+| Carrier/timing recovery | Tracks frequency and symbol phase for accurate sampling |
+
+The decoder is only as good as its input. The DSP front end cleans the
+waveform — equalizing channel distortion, recovering carrier and timing
+— so that the FEC stage sees errors it can actually correct. Soft-
+decision decoding closes the loop by passing the demodulator's
+confidence straight into the decoder instead of discarding it.

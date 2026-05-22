@@ -1,5 +1,5 @@
 /*
- * test_all.c - Unit tests for the DSP Study Guide.
+ * test_all.c - Unit tests for the DSP Guide.
  *
  * A tiny assert-and-count harness. Each test checks a numerical
  * property that must hold for a correct implementation. Exit status
@@ -347,6 +347,188 @@ static void test_dwt_constant_signal(void) {
     CHECK(ok, "constant signal -> all detail coefficients are 0");
 }
 
+/* ---- coding: error detection ---------------------------------------- */
+
+static void test_parity_detects_odd_flips(void) {
+    printf("[coding] parity detects an odd number of bit errors\n");
+    uint8_t data[4] = { 0xA5, 0x3C, 0xFF, 0x00 };
+    int p = dsp_parity_compute(data, 4, DSP_PARITY_EVEN);
+    CHECK(dsp_parity_check(data, 4, DSP_PARITY_EVEN, p),
+          "correct parity bit passes the check");
+
+    uint8_t flipped[4] = { 0xA5, 0x3C, 0xFF, 0x01 };  /* one bit flipped */
+    CHECK(!dsp_parity_check(flipped, 4, DSP_PARITY_EVEN, p),
+          "single-bit error fails the parity check");
+}
+
+static void test_checksum_roundtrip(void) {
+    printf("[coding] Internet checksum verifies intact data\n");
+    uint8_t data[10] = { 1,2,3,4,5,6,7,8,9,10 };
+    uint16_t c = dsp_checksum16(data, 10);
+    CHECK(dsp_checksum16_verify(data, 10, c),
+          "intact buffer verifies against its checksum");
+
+    data[4] ^= 0x80;
+    CHECK(!dsp_checksum16_verify(data, 10, c),
+          "corrupted buffer fails verification");
+}
+
+static void test_crc32_known_vector(void) {
+    printf("[coding] CRC-32 matches the standard test vector\n");
+    /* CRC-32 of the ASCII string "123456789" is 0xCBF43926. */
+    const uint8_t v[9] = { '1','2','3','4','5','6','7','8','9' };
+    CHECK(dsp_crc32(v, 9) == 0xCBF43926u,
+          "CRC-32(\"123456789\") == 0xCBF43926");
+}
+
+static void test_crc32_detects_burst(void) {
+    printf("[coding] CRC-32 detects a burst error\n");
+    uint8_t data[16];
+    for (int i = 0; i < 16; ++i) data[i] = (uint8_t)(i * 17 + 3);
+    uint32_t good = dsp_crc32(data, 16);
+    data[7] ^= 0xFF;            /* an 8-bit burst */
+    CHECK(dsp_crc32(data, 16) != good,
+          "burst error changes the CRC");
+}
+
+/* ---- coding: forward error correction ------------------------------- */
+
+static void test_hamming_corrects_single_bit(void) {
+    printf("[coding] Hamming(7,4) corrects any single-bit error\n");
+    int all_ok = 1;
+    for (uint8_t nib = 0; nib < 16; ++nib) {
+        uint8_t code = dsp_hamming74_encode(nib);
+        /* Flip each of the 7 bit positions in turn. */
+        for (int b = 0; b < 7; ++b) {
+            uint8_t bad = code ^ (uint8_t)(1u << b);
+            uint8_t got = dsp_hamming74_decode(bad, NULL);
+            if (got != nib) all_ok = 0;
+        }
+    }
+    CHECK(all_ok, "every nibble recovers from every single-bit flip");
+}
+
+static void test_hamming_clean_syndrome(void) {
+    printf("[coding] Hamming syndrome is zero for a clean codeword\n");
+    int all_ok = 1;
+    for (uint8_t nib = 0; nib < 16; ++nib)
+        if (dsp_hamming74_syndrome(dsp_hamming74_encode(nib)) != 0)
+            all_ok = 0;
+    CHECK(all_ok, "uncorrupted codewords have syndrome 0");
+}
+
+static void test_rs_corrects_burst(void) {
+    printf("[coding] Reed-Solomon corrects a burst of symbol errors\n");
+    dsp_rs rs;
+    int rc = dsp_rs_init(&rs, 8);          /* 8 parity -> t = 4 */
+    CHECK(rc == 0, "RS codec initialises with 8 parity symbols");
+
+    uint8_t data[12];
+    for (int i = 0; i < 12; ++i) data[i] = (uint8_t)(i * 11 + 7);
+    uint8_t parity[8];
+    dsp_rs_encode(&rs, data, 12, parity);
+
+    uint8_t cw[20];
+    for (int i = 0; i < 12; ++i) cw[i] = data[i];
+    for (int i = 0; i < 8;  ++i) cw[12 + i] = parity[i];
+
+    /* Corrupt 4 symbols - exactly the correction limit. */
+    cw[3] ^= 0x9D; cw[4] ^= 0x12; cw[5] ^= 0xC4; cw[6] ^= 0x77;
+
+    int nfix = dsp_rs_decode(&rs, cw, 20);
+    int ok = (nfix == 4);
+    for (int i = 0; i < 12; ++i) if (cw[i] != data[i]) ok = 0;
+    CHECK(ok, "4 corrupted symbols are located and repaired");
+}
+
+static void test_rs_clean_codeword(void) {
+    printf("[coding] Reed-Solomon reports zero errors on clean data\n");
+    dsp_rs rs;
+    dsp_rs_init(&rs, 4);
+    uint8_t data[8] = { 5,5,5,5,5,5,5,5 };
+    uint8_t parity[4];
+    dsp_rs_encode(&rs, data, 8, parity);
+    uint8_t cw[12];
+    for (int i = 0; i < 8; ++i) cw[i] = data[i];
+    for (int i = 0; i < 4; ++i) cw[8 + i] = parity[i];
+    CHECK(dsp_rs_decode(&rs, cw, 12) == 0,
+          "an untouched codeword decodes with 0 corrections");
+}
+
+static void test_viterbi_hard_decoding(void) {
+    printf("[coding] Viterbi (hard) corrects errors in a coded stream\n");
+    uint8_t bits[12] = { 1,1,0,1,0,0,1,0,1,1,0,0 };
+    uint8_t enc[2 * (12 + 2)];
+    size_t elen = dsp_conv_encode(bits, 12, enc);
+
+    uint8_t rx[2 * (12 + 2)];
+    memcpy(rx, enc, elen);
+    rx[3] ^= 1; rx[10] ^= 1;               /* two well-separated errors */
+
+    uint8_t dec[12];
+    size_t dn = dsp_viterbi_decode(rx, elen, dec);
+    int ok = (dn == 12);
+    for (size_t i = 0; i < dn; ++i) if (dec[i] != bits[i]) ok = 0;
+    CHECK(ok, "hard-decision Viterbi recovers the original 12 bits");
+}
+
+static void test_viterbi_soft_decoding(void) {
+    printf("[coding] Viterbi (soft) decodes from analog confidences\n");
+    uint8_t bits[10] = { 0,1,1,0,1,0,0,1,1,0 };
+    uint8_t enc[2 * (10 + 2)];
+    size_t elen = dsp_conv_encode(bits, 10, enc);
+
+    double soft[2 * (10 + 2)];
+    for (size_t i = 0; i < elen; ++i)
+        soft[i] = enc[i] ? -1.0 : 1.0;
+    /* Two near-zero (ambiguous) samples instead of hard flips. */
+    soft[4] = 0.05; soft[11] = -0.05;
+
+    uint8_t dec[10];
+    size_t dn = dsp_viterbi_decode_soft(soft, elen, dec);
+    int ok = (dn == 10);
+    for (size_t i = 0; i < dn; ++i) if (dec[i] != bits[i]) ok = 0;
+    CHECK(ok, "soft-decision Viterbi recovers the original 10 bits");
+}
+
+static void test_conv_encoded_length(void) {
+    printf("[coding] convolutional encoder output length is 2(n+2)\n");
+    uint8_t bits[5] = { 1,0,1,0,1 };
+    uint8_t enc[2 * (5 + 2)];
+    size_t elen = dsp_conv_encode(bits, 5, enc);
+    CHECK(elen == dsp_conv_encoded_len(5),
+          "rate-1/2 code with 2 tail bits -> length 2(n+2)");
+}
+
+/* ---- coding: channel equalization ----------------------------------- */
+
+static void test_lms_converges(void) {
+    printf("[coding] LMS equalizer reduces error as it converges\n");
+    enum { N = 600 };
+    double tx[N], rx[N];
+    unsigned seed = 999;
+    for (int i = 0; i < N; ++i) {
+        seed = seed * 1103515245u + 12345u;
+        tx[i] = ((seed >> 16) & 1) ? 1.0 : -1.0;
+    }
+    /* 2-tap multipath channel. */
+    rx[0] = tx[0];
+    for (int i = 1; i < N; ++i)
+        rx[i] = tx[i] + 0.5 * tx[i - 1];
+
+    dsp_lms eq;
+    int rc = dsp_lms_init(&eq, 11, 0.02);
+    CHECK(rc == 0, "LMS equalizer initialises");
+
+    double mse_early = dsp_lms_train(&eq, rx, tx, 100);
+    dsp_lms_train(&eq, rx + 100, tx + 100, 400);
+    double mse_late = dsp_lms_train(&eq, rx + 500, tx + 500, 100);
+
+    CHECK(mse_late < mse_early,
+          "mean-squared error decreases as the taps adapt");
+    dsp_lms_free(&eq);
+}
+
 int main(void) {
     printf("DSP STUDY GUIDE - test suite\n");
     printf("============================\n\n");
@@ -379,6 +561,21 @@ int main(void) {
     test_dwt_roundtrip();
     test_dwt_rejects_non_pow2();
     test_dwt_constant_signal();
+
+    test_parity_detects_odd_flips();
+    test_checksum_roundtrip();
+    test_crc32_known_vector();
+    test_crc32_detects_burst();
+
+    test_hamming_corrects_single_bit();
+    test_hamming_clean_syndrome();
+    test_rs_corrects_burst();
+    test_rs_clean_codeword();
+    test_viterbi_hard_decoding();
+    test_viterbi_soft_decoding();
+    test_conv_encoded_length();
+
+    test_lms_converges();
 
     printf("\n============================\n");
     printf("Tests run: %d   Passed: %d   Failed: %d\n",

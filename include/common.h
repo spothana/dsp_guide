@@ -1,5 +1,5 @@
 /*
- * common.h - Shared types and helpers for the DSP Study Guide
+ * common.h - Shared types and helpers for the DSP Guide
  *
  * A minimal complex-number type and a few utilities. We use C99's
  * native <complex.h> double _Complex for arithmetic, but wrap it in

@@ -1,15 +1,14 @@
-# DSP Study Guide — C Implementation
+# DSP Guide — C Implementation
 
 A reference implementation of the **common digital signal processing
 algorithms**, organised by category, with every module annotated with
 the problem it solves, its computational complexity, and the trade-offs
 versus its alternatives.
 
-
 ## Project layout
 
 ```
-dsp_study_guide/
+dsp_guide/
 ├── CMakeLists.txt
 ├── include/
 │   ├── dsp.h                   <- single master include
@@ -19,11 +18,12 @@ dsp_study_guide/
 │   ├── operations/             <- convolution, correlation
 │   ├── spectral/               <- window functions
 │   ├── sampling/               <- decimation, interpolation, resampling
-│   └── wavelet/                <- discrete wavelet transform
+│   ├── wavelet/                <- discrete wavelet transform
+│   └── coding/                 <- error detection, FEC, equalization
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 26 unit tests
+│   └── test_all.c              <- 42 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -57,6 +57,7 @@ dependencies.
 | **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows |
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
+| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi; LMS equalizer |
 
 ## Design notes
 
@@ -74,15 +75,28 @@ dependencies.
   multiplication duality.
 - **Wavelet** transform uses the Haar basis via Mallat's pyramid
   algorithm; the round-trip is numerically exact.
+- **Error detection** covers parity, the 16-bit Internet checksum, and
+  table-driven CRC-32 (Ethernet polynomial).
+- **Forward error correction** implements Hamming(7,4) (syndrome
+  decoding), Reed-Solomon over GF(2^8) (Berlekamp-Massey, Chien search,
+  Forney algorithm), and a rate-1/2 convolutional code with a Viterbi
+  decoder supporting both hard- and soft-decision metrics. LDPC and
+  Turbo codes are documented in the headers but not implemented.
+- **Channel equalization** is an LMS adaptive FIR filter, the DSP front-
+  end stage that cleans channel distortion before the decoder runs.
 
 See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-26 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+42 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
 correlation-based delay estimation, auto-correlation peak, window
 endpoint/symmetry properties, resampling output lengths, the wavelet
-round-trip, and wavelet rejection of non-power-of-two lengths.
+round-trip, wavelet rejection of non-power-of-two lengths, parity and
+checksum detection, the CRC-32 standard test vector and burst
+detection, Hamming single-bit correction, Reed-Solomon burst
+correction, hard- and soft-decision Viterbi decoding, and LMS equalizer
+convergence.
