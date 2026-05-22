@@ -124,6 +124,30 @@ bandwidth on redundancy but needs no round-trip. Real systems often
 combine them (hybrid ARQ): FEC handles common errors, a CRC catches the
 rare residue and triggers a resend.
 
+### Interleaving
+
+| Type | Streaming | Latency / memory | Used in |
+|---|---|---|---|
+| Block | Needs a full R×C block | Higher | DVB-T, storage |
+| Convolutional | Continuous | ~half the block cost | DVB, ADSL |
+
+Interleaving adds **no redundancy and corrects nothing on its own** — it
+only rearranges symbols. The transmitter scrambles the symbol order; the
+receiver unscrambles it. A burst that hits the scrambled stream is
+spread thin once de-interleaved, so each FEC codeword sees only a few
+errors — within its correction limit. This is what lets a code rated for
+`t` errors survive bursts far longer than `t`.
+
+The block interleaver fills an R×C matrix row by row and reads it column
+by column; map one codeword per row and a burst is dealt round-robin
+across codewords. The convolutional interleaver uses a bank of
+staggered delay lines, streams continuously with no block boundary, and
+reaches the same spreading at roughly half the latency and memory.
+Interleaver depth trades burst protection against latency.
+
+  transmit:  encode → interleave → channel
+  receive:   channel → deinterleave → decode
+
 ### DSP's role in error handling
 
 | Function | What it does |

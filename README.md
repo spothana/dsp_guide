@@ -5,6 +5,7 @@ algorithms**, organised by category, with every module annotated with
 the problem it solves, its computational complexity, and the trade-offs
 versus its alternatives.
 
+
 ## Project layout
 
 ```
@@ -23,7 +24,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 42 unit tests
+│   └── test_all.c              <- 49 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -57,7 +58,7 @@ dependencies.
 | **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows |
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
-| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi; LMS equalizer |
+| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi; block & convolutional interleaving; LMS equalizer |
 
 ## Design notes
 
@@ -82,6 +83,11 @@ dependencies.
   Forney algorithm), and a rate-1/2 convolutional code with a Viterbi
   decoder supporting both hard- and soft-decision metrics. LDPC and
   Turbo codes are documented in the headers but not implemented.
+- **Interleaving** provides block (R×C matrix) and convolutional
+  (staggered delay lines) interleavers. These add no redundancy; they
+  scatter burst errors so the FEC stage sees only correctable counts.
+  The demo shows a 6-symbol burst that destroys one Reed-Solomon
+  codeword without interleaving but is fully survivable with it.
 - **Channel equalization** is an LMS adaptive FIR filter, the DSP front-
   end stage that cleans channel distortion before the decoder runs.
 
@@ -89,7 +95,7 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-42 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+49 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -98,5 +104,6 @@ endpoint/symmetry properties, resampling output lengths, the wavelet
 round-trip, wavelet rejection of non-power-of-two lengths, parity and
 checksum detection, the CRC-32 standard test vector and burst
 detection, Hamming single-bit correction, Reed-Solomon burst
-correction, hard- and soft-decision Viterbi decoding, and LMS equalizer
-convergence.
+correction, hard- and soft-decision Viterbi decoding, block and convolutional
+interleaver round-trips, interleaving-aided burst recovery, and LMS
+equalizer convergence.

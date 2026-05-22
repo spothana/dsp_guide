@@ -349,6 +349,93 @@ static void demo_equalization(void) {
     dsp_lms_free(&eq);
 }
 
+/* ---- Interleaving ---------------------------------------------------- */
+
+static void demo_interleaving(void) {
+    section("INTERLEAVING (burst-error resilience)");
+
+    /* Block interleaver: show how a burst gets spread out. */
+    enum { R = 4, C = 6, LEN = R * C };
+    uint8_t data[LEN], inter[LEN], deinter[LEN];
+    for (int i = 0; i < LEN; ++i) data[i] = (uint8_t)i;
+
+    dsp_block_interleave(data, inter, LEN, R, C);
+    printf("Block interleaver, %dx%d matrix.\n", R, C);
+    printf("  original order : ");
+    for (int i = 0; i < LEN; ++i) printf("%2d ", data[i]);
+    printf("\n  interleaved    : ");
+    for (int i = 0; i < LEN; ++i) printf("%2d ", inter[i]);
+
+    /* A 4-symbol burst hits the interleaved stream... */
+    for (int i = 8; i < 12; ++i) inter[i] = 0xEE;
+    dsp_block_deinterleave(inter, deinter, LEN, R, C);
+    printf("\n  after a 4-symbol burst, de-interleaved error map:\n  ");
+    for (int i = 0; i < LEN; ++i)
+        printf("%s ", deinter[i] == data[i] ? " ." : " X");
+    printf("\n-> the 4 errors are scattered, not clustered: each row\n");
+    printf("   (codeword) now holds at most one.\n");
+
+    /* End-to-end: interleaving rescues Reed-Solomon from a long burst. */
+    printf("\nEnd-to-end test: Reed-Solomon RS(15,11), corrects t=2.\n");
+    dsp_rs rs;
+    dsp_rs_init(&rs, 4);                       /* 4 parity -> t = 2 */
+
+    /* Build 4 codewords of 15 symbols each = 60 symbols. */
+    enum { NCW = 4, N = 15, KK = 11, TOTAL = NCW * N };
+    uint8_t cw[TOTAL];
+    for (int w = 0; w < NCW; ++w) {
+        uint8_t msg[KK], par[4];
+        for (int i = 0; i < KK; ++i) msg[i] = (uint8_t)(w * 20 + i);
+        dsp_rs_encode(&rs, msg, KK, par);
+        for (int i = 0; i < KK; ++i) cw[w * N + i] = msg[i];
+        for (int i = 0; i < 4;  ++i) cw[w * N + KK + i] = par[i];
+    }
+
+    /* Case A: a 6-symbol burst with NO interleaving. It all lands in
+     * one codeword -> 6 errors > t=2 -> that codeword is lost. */
+    uint8_t plain[TOTAL];
+    for (int i = 0; i < TOTAL; ++i) plain[i] = cw[i];
+    for (int i = 16; i < 22; ++i) plain[i] ^= 0x5A;   /* burst in cw 1 */
+    int lost = 0;
+    for (int w = 0; w < NCW; ++w)
+        if (dsp_rs_decode(&rs, plain + w * N, N) < 0) ++lost;
+    printf("  without interleaving: 6-symbol burst -> %d codeword(s) "
+           "uncorrectable\n", lost);
+
+    /* Case B: same burst, but interleave before the channel and
+     * de-interleave after. The matrix has NCW rows (one per codeword)
+     * and N columns, so the 6 errors spread one-per-codeword. */
+    uint8_t tx[TOTAL], rx[TOTAL];
+    dsp_block_interleave(cw, tx, TOTAL, NCW, N);   /* 4x15 matrix */
+    for (int i = 16; i < 22; ++i) tx[i] ^= 0x5A;   /* same 6-burst */
+    dsp_block_deinterleave(tx, rx, TOTAL, NCW, N);
+    int recovered = 1;
+    for (int w = 0; w < NCW; ++w)
+        if (dsp_rs_decode(&rs, rx + w * N, N) < 0) recovered = 0;
+    int data_ok = 1;
+    for (int w = 0; w < NCW; ++w)
+        for (int i = 0; i < KK; ++i)
+            if (rx[w * N + i] != cw[w * N + i]) data_ok = 0;
+    printf("  with interleaving   : same burst -> %s\n",
+           (recovered && data_ok)
+               ? "all 4 codewords recovered"
+               : "decode failed");
+    printf("-> interleaving spreads the burst so each RS codeword\n");
+    printf("   sees <= 2 errors, within its correction limit.\n");
+
+    /* Convolutional interleaver: continuous-stream alternative. */
+    dsp_conv_interleaver itl, dtl;
+    dsp_conv_interleaver_init(&itl, 4, 2);
+    dsp_conv_deinterleaver_init(&dtl, 4, 2);
+    printf("\nConvolutional interleaver (4 branches, depth 2):\n");
+    printf("  end-to-end latency: %zu symbols\n",
+           dsp_conv_interleaver_latency(4, 2));
+    printf("-> streams continuously, no block boundary; about half the\n");
+    printf("   memory and latency of an equivalent block interleaver.\n");
+    dsp_conv_interleaver_free(&itl);
+    dsp_conv_interleaver_free(&dtl);
+}
+
 int main(void) {
     printf("DSP STUDY GUIDE - annotated demo\n");
     printf("C implementation of common digital signal processing algorithms.\n");
@@ -361,6 +448,7 @@ int main(void) {
     demo_wavelet();
     demo_detection();
     demo_correction();
+    demo_interleaving();
     demo_equalization();
 
     printf("\nAll demos complete.\n");

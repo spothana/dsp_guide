@@ -529,6 +529,120 @@ static void test_lms_converges(void) {
     dsp_lms_free(&eq);
 }
 
+/* ---- coding: interleaving -------------------------------------------- */
+
+static void test_block_interleave_roundtrip(void) {
+    printf("[coding] block interleave then deinterleave is identity\n");
+    enum { R = 5, C = 7, LEN = R * C };
+    uint8_t in[LEN], mid[LEN], out[LEN];
+    for (int i = 0; i < LEN; ++i) in[i] = (uint8_t)(i * 3 + 1);
+
+    int rc1 = dsp_block_interleave(in, mid, LEN, R, C);
+    int rc2 = dsp_block_deinterleave(mid, out, LEN, R, C);
+    int ok = (rc1 == 0 && rc2 == 0);
+    for (int i = 0; i < LEN; ++i) if (out[i] != in[i]) ok = 0;
+    CHECK(ok, "deinterleave(interleave(x)) == x");
+}
+
+static void test_block_interleave_size_check(void) {
+    printf("[coding] block interleaver rejects a bad matrix size\n");
+    uint8_t in[10], out[10];
+    /* 10 != 3 * 4, so this must fail. */
+    CHECK(dsp_block_interleave(in, out, 10, 3, 4) == -1,
+          "len != rows*cols is rejected");
+}
+
+static void test_block_interleave_spreads_burst(void) {
+    printf("[coding] block interleaving spreads a burst across rows\n");
+    enum { R = 4, C = 8, LEN = R * C };
+    uint8_t in[LEN], mid[LEN], out[LEN];
+    for (int i = 0; i < LEN; ++i) in[i] = (uint8_t)i;
+
+    dsp_block_interleave(in, mid, LEN, R, C);
+    /* A burst of R consecutive errors on the interleaved stream. */
+    for (int i = 10; i < 10 + R; ++i) mid[i] ^= 0xFF;
+    dsp_block_deinterleave(mid, out, LEN, R, C);
+
+    /* Count errors per row; each row models one codeword. */
+    int max_per_row = 0;
+    for (int r = 0; r < R; ++r) {
+        int e = 0;
+        for (int c = 0; c < C; ++c)
+            if (out[r * C + c] != in[r * C + c]) ++e;
+        if (e > max_per_row) max_per_row = e;
+    }
+    CHECK(max_per_row <= 1,
+          "an R-symbol burst leaves at most 1 error per row");
+}
+
+static void test_block_interleave_rescues_rs(void) {
+    printf("[coding] interleaving lets RS survive an over-limit burst\n");
+    dsp_rs rs;
+    dsp_rs_init(&rs, 4);                        /* t = 2 */
+    enum { NCW = 4, N = 15, KK = 11, TOTAL = NCW * N };
+
+    uint8_t cw[TOTAL];
+    for (int w = 0; w < NCW; ++w) {
+        uint8_t msg[KK], par[4];
+        for (int i = 0; i < KK; ++i) msg[i] = (uint8_t)(w * 13 + i * 2);
+        dsp_rs_encode(&rs, msg, KK, par);
+        for (int i = 0; i < KK; ++i) cw[w * N + i] = msg[i];
+        for (int i = 0; i < 4;  ++i) cw[w * N + KK + i] = par[i];
+    }
+
+    /* Without interleaving: a 6-symbol burst inside one codeword. */
+    uint8_t plain[TOTAL];
+    for (int i = 0; i < TOTAL; ++i) plain[i] = cw[i];
+    for (int i = 3; i < 9; ++i) plain[i] ^= 0x7C;
+    CHECK(dsp_rs_decode(&rs, plain, N) < 0,
+          "6-symbol burst alone exceeds RS t=2 (uncorrectable)");
+
+    /* With interleaving: the same burst spread across all codewords.
+     * The matrix has NCW rows (one per codeword) and N columns, so
+     * reading out by column makes consecutive symbols come from
+     * consecutive codewords - a burst is dealt round-robin. */
+    uint8_t tx[TOTAL], rx[TOTAL];
+    dsp_block_interleave(cw, tx, TOTAL, NCW, N);
+    for (int i = 3; i < 9; ++i) tx[i] ^= 0x7C;
+    dsp_block_deinterleave(tx, rx, TOTAL, NCW, N);
+
+    int ok = 1;
+    for (int w = 0; w < NCW; ++w) {
+        if (dsp_rs_decode(&rs, rx + w * N, N) < 0) ok = 0;
+        for (int i = 0; i < KK; ++i)
+            if (rx[w * N + i] != cw[w * N + i]) ok = 0;
+    }
+    CHECK(ok, "interleaved: every RS codeword recovers from the burst");
+}
+
+static void test_conv_interleaver_roundtrip(void) {
+    printf("[coding] convolutional interleaver pair preserves the stream\n");
+    dsp_conv_interleaver itl, dtl;
+    int rc1 = dsp_conv_interleaver_init(&itl, 4, 3);
+    int rc2 = dsp_conv_deinterleaver_init(&dtl, 4, 3);
+    CHECK(rc1 == 0 && rc2 == 0, "interleaver and deinterleaver init");
+
+    enum { N = 64 };
+    uint8_t in[N];
+    for (int i = 0; i < N; ++i) in[i] = (uint8_t)(i * 5 + 9);
+
+    /* Push through interleaver then deinterleaver; the pair imposes a
+     * fixed total latency, so output i matches input i once primed. */
+    size_t lat = dsp_conv_interleaver_latency(4, 3);
+    uint8_t out[N];
+    for (int i = 0; i < N; ++i) {
+        uint8_t a = dsp_conv_interleave_step(&itl, in[i]);
+        out[i] = dsp_conv_interleave_step(&dtl, a);
+    }
+    int ok = 1;
+    for (size_t i = lat; i < N; ++i)
+        if (out[i] != in[i - lat]) ok = 0;
+    CHECK(ok, "deinterleaved stream equals the input, delayed by latency");
+
+    dsp_conv_interleaver_free(&itl);
+    dsp_conv_interleaver_free(&dtl);
+}
+
 int main(void) {
     printf("DSP STUDY GUIDE - test suite\n");
     printf("============================\n\n");
@@ -574,6 +688,12 @@ int main(void) {
     test_viterbi_hard_decoding();
     test_viterbi_soft_decoding();
     test_conv_encoded_length();
+
+    test_block_interleave_roundtrip();
+    test_block_interleave_size_check();
+    test_block_interleave_spreads_burst();
+    test_block_interleave_rescues_rs();
+    test_conv_interleaver_roundtrip();
 
     test_lms_converges();
 
