@@ -452,3 +452,51 @@ the output uses the full tonal range — a contrast fix that depends only
 on each pixel's own value. Otsu's method picks the threshold that best
 splits the histogram into two classes by maximising the between-class
 variance, binarizing an image with no manual tuning.
+
+## Array signal processing
+
+A single sensor measures a signal but not its direction. An array of
+sensors can: a wave arriving at an angle reaches the sensors at slightly
+different times, and that pattern of phase shifts encodes the direction.
+
+| Method | Type | Resolution | Needs #sources | Cost |
+|---|---|---|---|---|
+| Delay-and-sum | Beamformer | Beamwidth ~ 1/aperture | No | Low |
+| MVDR / Capon | Beamformer | High (sharp nulls) | No | Medium (matrix inverse) |
+| Spatial MUSIC | Subspace DOA | Super-resolution | Yes | High (eigen + search) |
+| Spatial ESPRIT | Subspace DOA | Super-resolution | Yes | Medium (eigen, no search) |
+
+The model is a uniform linear array (ULA) of M sensors spaced d
+wavelengths apart. A plane wave from angle theta gives sensor k a phase
+advance of 2*pi*d*k*sin(theta); the vector of those phases is the
+**steering vector** a(theta). With several time snapshots the M x M
+covariance matrix R captures the spatial structure, and every method
+works from R.
+
+**Delay-and-sum** steers the array across all angles and measures the
+power a(theta)^H R a(theta) — a spatial filter whose peaks mark the
+sources. Simple, but its beamwidth is set by the array aperture, so it
+blurs close sources. **MVDR (Capon)** keeps unit gain on the look
+direction while minimising total output power, 1/(a^H R^-1 a), placing
+sharp nulls on interferers and resolving far better.
+
+**MUSIC** and **ESPRIT** are the same algorithms the guide uses for
+temporal frequency estimation (see the advanced spectral estimation
+section) — a direction of arrival and a temporal frequency are both just
+the phase slope of a complex exponential. The spatial versions
+eigen-decompose the *complex Hermitian* covariance into a signal and a
+noise subspace. MUSIC scans a pseudospectrum whose peaks are the arrival
+angles; ESPRIT exploits the ULA's shift-invariance (two overlapping
+subarrays differ only by a phase rotation) to solve for the angles
+directly, with no search. Both reach super-resolution: they separate
+sources closer than the conventional beamwidth.
+
+The complex eigen-decomposition uses a Hermitian Jacobi method (the
+complex analogue of the real Jacobi solver used for the temporal
+methods). ESPRIT recovers each angle from the eigenvalues of a
+shift-rotation matrix, found by a shifted QR iteration with deflation —
+a plain QR converges poorly because those eigenvalues all lie on the
+unit circle.
+
+These are the methods behind radar and sonar direction finding, smart
+antennas in wireless systems, and acoustic source localisation.

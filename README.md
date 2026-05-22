@@ -24,12 +24,13 @@ dsp_guide/
 │   ├── adaptive/               <- LMS, NLMS, RLS adaptive filters
 │   ├── modulation/             <- QAM, OFDM, channel, coded OFDM,
 │   │                              pulse shaping, carrier/timing sync
-│   └── image/                  <- image type, 2-D FFT/DCT, spatial
-│                                  filters, point ops, 2-D wavelet
+│   ├── image/                  <- image type, 2-D FFT/DCT, spatial
+│   │                              filters, point ops, 2-D wavelet
+│   └── array/                  <- beamforming, DOA (MUSIC/ESPRIT)
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 130 unit tests
+│   └── test_all.c              <- 142 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -67,6 +68,7 @@ dependencies.
 | **Adaptive filters** | LMS, NLMS, and RLS, for channel equalization, system identification, and noise cancellation |
 | **Modulation** | QPSK / 16-QAM / 64-QAM with soft demapping; multipath + AWGN channel; OFDM (IFFT/CP/FFT, per-subcarrier equalization); coded OFDM; RRC pulse shaping; carrier & timing recovery |
 | **Image processing** | grayscale image type with PGM I/O; 2-D FFT and DCT (incl. 8x8 JPEG block); Gaussian/box/sharpen/Sobel/Laplacian/median filters; histogram equalization; Otsu thresholding; 2-D Haar wavelet |
+| **Array processing** | uniform linear array model; delay-and-sum and MVDR/Capon beamforming; direction-of-arrival estimation by spatial MUSIC and ESPRIT |
 
 ## Design notes
 
@@ -131,12 +133,17 @@ dependencies.
   Laplacian, and the non-linear median filter), point operators
   (histogram equalization, fixed and Otsu thresholding), and a 2-D
   Haar wavelet - the JPEG 2000 transform.
+- **Array processing** models a uniform linear array and locates wave
+  sources from the sensor covariance: delay-and-sum and MVDR/Capon
+  beamforming, and direction-of-arrival estimation by spatial MUSIC
+  and ESPRIT. These reuse the MUSIC/ESPRIT idea from the spectral
+  module with a complex Hermitian eigensolver.
 
 See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-130 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+142 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -157,6 +164,8 @@ locking, LMS/NLMS/RLS convergence and adaptive noise cancellation,
 advanced spectral estimation (AR/Burg model recovery, ARMA, and
 MUSIC/ESPRIT resolving closely spaced tones), time-frequency analysis
 (STFT chirp tracking and exact overlap-add inverse, QMF reconstruction,
-Wigner-Ville ridge tracking), and the image module - 2-D FFT/DCT/wavelet round-trips, 8x8
+Wigner-Ville ridge tracking), the image module,
+and array processing (steering vectors, Hermitian covariance,
+beamforming, and MUSIC/ESPRIT direction finding) - 2-D FFT/DCT/wavelet round-trips, 8x8
 DCT compaction, spatial filters, the median filter, histograms, and
 Otsu thresholding.

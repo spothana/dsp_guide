@@ -26,6 +26,8 @@
  *                  recovery
  *   image/       - grayscale image type, 2-D FFT and DCT, spatial
  *                  filtering, point operators, and the 2-D wavelet
+ *   array/       - array signal processing: beamforming and
+ *                  direction-of-arrival estimation
  *
  * Every module is annotated with: what problem it solves, its
  * computational complexity, and the trade-offs versus its alternatives.
@@ -68,5 +70,7 @@
 #include "modulation/sync.h"
 
 #include "image/image_all.h"
+
+#include "array/array.h"
 
 #endif /* DSP_H */

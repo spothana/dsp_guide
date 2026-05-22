@@ -1118,6 +1118,87 @@ static void demo_image(void) {
     dsp_image_free(&wav);
 }
 
+/* ---- Array signal processing ---------------------------------------- */
+
+static void demo_array(void) {
+    section("ARRAY PROCESSING (beamforming & DOA)");
+
+    /* An 8-element uniform linear array, half-wavelength spacing.
+     * Two plane-wave sources arrive from -20 and +30 degrees. */
+    enum { M = 8, T = 300, NANG = 361 };
+    double deg = M_PI / 180.0;
+    double src[2] = { -20.0 * deg, 30.0 * deg };
+
+    cplx *snap = malloc(T * M * sizeof(cplx));
+    cplx *R    = malloc(M * M * sizeof(cplx));
+    dsp_array_synthesize(M, 0.5, T, src, 2, 0.2, 2024, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    printf("8-sensor uniform linear array, half-wavelength spacing.\n");
+    printf("Two sources arrive from -20 and +30 degrees.\n");
+    printf("The array's job: find those directions from the sensor\n");
+    printf("covariance alone.\n");
+
+    /* Helper to report the strongest peaks of an angle spectrum. */
+    double *pc = malloc(NANG * sizeof(double));
+    double *pm = malloc(NANG * sizeof(double));
+    double *pu = malloc(NANG * sizeof(double));
+
+    /* --- Conventional (delay-and-sum) beamformer --- */
+    dsp_beamform_conventional(R, M, 0.5, pc, NANG);
+    size_t cpk = 1;
+    for (size_t i = 1; i + 1 < NANG; ++i)
+        if (pc[i] > pc[cpk]) cpk = i;
+    printf("\nConventional (delay-and-sum) beamformer:\n");
+    printf("  steers the array across all angles, measures power\n");
+    printf("  strongest peak at %.0f degrees\n",
+           -90.0 + 180.0 * (double)cpk / (NANG - 1));
+    printf("  -> finds a source, but its wide beam blurs the two.\n");
+
+    /* --- MVDR / Capon beamformer --- */
+    dsp_beamform_mvdr(R, M, 0.5, pm, NANG);
+    double mmax = 0.0;
+    for (size_t i = 0; i < NANG; ++i)
+        if (pm[i] > mmax) mmax = pm[i];
+    printf("\nMVDR / Capon beamformer (minimum variance):\n");
+    printf("  keeps unit gain on the look angle, nulls everything\n");
+    printf("  else - far sharper. Peaks at:");
+    for (size_t i = 1; i + 1 < NANG; ++i)
+        if (pm[i] > pm[i - 1] && pm[i] > pm[i + 1] && pm[i] > 0.2 * mmax)
+            printf(" %.0f", -90.0 + 180.0 * (double)i / (NANG - 1));
+    printf(" degrees\n");
+
+    /* --- Spatial MUSIC --- */
+    dsp_doa_music(R, M, 0.5, 2, pu, NANG);
+    double umax = 0.0;
+    for (size_t i = 0; i < NANG; ++i)
+        if (pu[i] > umax) umax = pu[i];
+    printf("\nSpatial MUSIC (subspace super-resolution):\n");
+    printf("  eigen-splits the covariance into signal + noise\n");
+    printf("  subspaces. Pseudospectrum peaks at:");
+    for (size_t i = 1; i + 1 < NANG; ++i)
+        if (pu[i] > pu[i - 1] && pu[i] > pu[i + 1] && pu[i] > 0.1 * umax)
+            printf(" %.0f", -90.0 + 180.0 * (double)i / (NANG - 1));
+    printf(" degrees\n");
+
+    /* --- Spatial ESPRIT --- */
+    double doa[2];
+    int ne = dsp_doa_esprit(R, M, 0.5, 2, doa);
+    printf("\nSpatial ESPRIT (direct, no angle search):\n");
+    printf("  exploits the array's shift-invariance. Angles:");
+    for (int i = 0; i < ne; ++i)
+        printf(" %.0f", doa[i] / deg);
+    printf(" degrees\n");
+
+    printf("\n-> MUSIC and ESPRIT are the same algorithms used for\n");
+    printf("   temporal frequency estimation (see spectral/): a\n");
+    printf("   direction and a frequency are both the phase slope of\n");
+    printf("   a complex exponential.\n");
+
+    free(snap); free(R);
+    free(pc); free(pm); free(pu);
+}
+
 int main(void) {
     printf("DSP GUIDE - annotated demo\n");
     printf("C implementation of common digital signal processing algorithms.\n");
@@ -1139,6 +1220,7 @@ int main(void) {
     demo_coded_ofdm();
     demo_sync();
     demo_image();
+    demo_array();
 
     printf("\nAll demos complete.\n");
     return 0;

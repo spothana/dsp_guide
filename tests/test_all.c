@@ -1816,6 +1816,168 @@ static void test_dwt2d_rejects_odd(void) {
     dsp_image_free(&img);
 }
 
+/* ---- array: beamforming and DOA estimation -------------------------- */
+
+#define ARR_DEG (M_PI / 180.0)
+
+static void test_array_steering_vector(void) {
+    printf("[array] steering vector has unit-magnitude phased entries\n");
+    enum { M = 6 };
+    cplx a[M];
+    dsp_array_steering(M, 0.5, 25.0 * ARR_DEG, a);
+
+    /* Every element is a pure phase, so |a[k]| = 1. */
+    int unit = 1;
+    for (int k = 0; k < M; ++k)
+        if (!close(cabs(a[k]), 1.0, 1e-9)) unit = 0;
+    CHECK(unit, "all steering-vector elements have magnitude 1");
+
+    /* Element 0 is the reference: phase 0, value 1. */
+    CHECK(close(creal(a[0]), 1.0, 1e-9) && close(cimag(a[0]), 0.0, 1e-9),
+          "the reference sensor has zero phase");
+}
+
+static void test_array_covariance_hermitian(void) {
+    printf("[array] sample covariance matrix is Hermitian\n");
+    enum { M = 6, T = 200 };
+    double src[1] = { 15.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 1, 0.1, 7, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    /* R[i][j] must equal conj(R[j][i]). */
+    int herm = 1;
+    for (int i = 0; i < M; ++i)
+        for (int j = 0; j < M; ++j) {
+            cplx d = R[i * M + j] - conj(R[j * M + i]);
+            if (cabs(d) > 1e-9) herm = 0;
+        }
+    CHECK(herm, "R[i][j] == conj(R[j][i]) for all i, j");
+}
+
+static void test_beamform_conventional_finds_source(void) {
+    printf("[array] conventional beamformer peaks at the source angle\n");
+    enum { M = 8, T = 300, NA = 361 };
+    double src[1] = { 20.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 1, 0.1, 11, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    double power[NA];
+    dsp_beamform_conventional(R, M, 0.5, power, NA);
+
+    size_t pk = 1;
+    for (size_t i = 1; i + 1 < NA; ++i)
+        if (power[i] > power[pk]) pk = i;
+    double angle = -90.0 + 180.0 * (double)pk / (NA - 1);
+    CHECK(fabs(angle - 20.0) < 3.0,
+          "the beamformer power peaks near 20 degrees");
+}
+
+static void test_beamform_mvdr_resolves_two(void) {
+    printf("[array] MVDR beamformer resolves two sources\n");
+    enum { M = 8, T = 400, NA = 361 };
+    double src[2] = { -20.0 * ARR_DEG, 30.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 2, 0.15, 23, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    double power[NA];
+    int rc = dsp_beamform_mvdr(R, M, 0.5, power, NA);
+    CHECK(rc == 0, "MVDR completes (covariance is invertible)");
+
+    /* Both true angles should have a clear peak nearby. */
+    double mx = 0.0;
+    for (int i = 0; i < NA; ++i) if (power[i] > mx) mx = power[i];
+    int near_lo = 0, near_hi = 0;
+    for (int i = 1; i + 1 < NA; ++i) {
+        if (power[i] > power[i - 1] && power[i] > power[i + 1]
+            && power[i] > 0.2 * mx) {
+            double a = -90.0 + 180.0 * (double)i / (NA - 1);
+            if (fabs(a - (-20.0)) < 4.0) near_lo = 1;
+            if (fabs(a -   30.0)  < 4.0) near_hi = 1;
+        }
+    }
+    CHECK(near_lo && near_hi,
+          "MVDR shows a peak at each of the two source angles");
+}
+
+static void test_doa_music_resolves_two(void) {
+    printf("[array] spatial MUSIC resolves two close sources\n");
+    enum { M = 8, T = 400, NA = 361 };
+    double src[2] = { -20.0 * ARR_DEG, 30.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 2, 0.15, 31, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    double pseudo[NA];
+    int rc = dsp_doa_music(R, M, 0.5, 2, pseudo, NA);
+    CHECK(rc == 0, "spatial MUSIC completes for 2 sources");
+
+    double mx = 0.0;
+    for (int i = 0; i < NA; ++i) if (pseudo[i] > mx) mx = pseudo[i];
+    int near_lo = 0, near_hi = 0;
+    for (int i = 1; i + 1 < NA; ++i) {
+        if (pseudo[i] > pseudo[i - 1] && pseudo[i] > pseudo[i + 1]
+            && pseudo[i] > 0.1 * mx) {
+            double a = -90.0 + 180.0 * (double)i / (NA - 1);
+            if (fabs(a - (-20.0)) < 3.0) near_lo = 1;
+            if (fabs(a -   30.0)  < 3.0) near_hi = 1;
+        }
+    }
+    CHECK(near_lo && near_hi,
+          "the MUSIC pseudospectrum peaks at both source angles");
+}
+
+static void test_doa_music_rejects_bad_params(void) {
+    printf("[array] spatial MUSIC rejects too many sources\n");
+    enum { M = 4, T = 100, NA = 100 };
+    double src[1] = { 10.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 1, 0.1, 5, snap);
+    dsp_array_covariance(snap, M, T, R);
+    double pseudo[NA];
+    /* nsources must be < nsensors. */
+    CHECK(dsp_doa_music(R, M, 0.5, 4, pseudo, NA) == -1,
+          "nsources >= nsensors is rejected");
+}
+
+static void test_doa_esprit_estimates_angles(void) {
+    printf("[array] spatial ESPRIT estimates two source angles\n");
+    enum { M = 10, T = 500 };
+    double src[2] = { -20.0 * ARR_DEG, 30.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 2, 0.1, 43, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    double doa[2];
+    int ne = dsp_doa_esprit(R, M, 0.5, 2, doa);
+    CHECK(ne == 2, "ESPRIT returns two angle estimates");
+
+    /* Each true angle should be matched by one estimate (either order). */
+    double a0 = doa[0] / ARR_DEG, a1 = doa[1] / ARR_DEG;
+    int near_lo = (fabs(a0 - (-20.0)) < 4.0)
+               || (fabs(a1 - (-20.0)) < 4.0);
+    int near_hi = (fabs(a0 -  30.0)  < 4.0)
+               || (fabs(a1 -  30.0)  < 4.0);
+    CHECK(near_lo && near_hi,
+          "both source angles are recovered within tolerance");
+}
+
+static void test_doa_esprit_single_source(void) {
+    printf("[array] spatial ESPRIT pinpoints a single source\n");
+    enum { M = 8, T = 400 };
+    double src[1] = { 12.0 * ARR_DEG };
+    cplx snap[T * M], R[M * M];
+    dsp_array_synthesize(M, 0.5, T, src, 1, 0.05, 61, snap);
+    dsp_array_covariance(snap, M, T, R);
+
+    double doa[1];
+    int ne = dsp_doa_esprit(R, M, 0.5, 1, doa);
+    CHECK(ne == 1 && fabs(doa[0] / ARR_DEG - 12.0) < 3.0,
+          "the single source is located near 12 degrees");
+}
+
 int main(void) {
     printf("DSP GUIDE - test suite\n");
     printf("============================\n\n");
@@ -1929,6 +2091,15 @@ int main(void) {
     test_threshold_binarizes();
     test_dwt2d_roundtrip();
     test_dwt2d_rejects_odd();
+
+    test_array_steering_vector();
+    test_array_covariance_hermitian();
+    test_beamform_conventional_finds_source();
+    test_beamform_mvdr_resolves_two();
+    test_doa_music_resolves_two();
+    test_doa_music_rejects_bad_params();
+    test_doa_esprit_estimates_angles();
+    test_doa_esprit_single_source();
 
     test_lms_converges();
     test_nlms_converges();
