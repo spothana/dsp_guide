@@ -21,7 +21,7 @@ dsp_guide/
 │   ├── sampling/               <- decimation, interpolation, resampling
 │   ├── wavelet/                <- discrete wavelet transform
 │   ├── coding/                 <- error detection, FEC, interleaving
-│   ├── adaptive/               <- LMS, NLMS, RLS adaptive filters
+│   ├── adaptive/               <- LMS/NLMS/RLS filters, Kalman/EKF
 │   ├── modulation/             <- QAM, OFDM, channel, coded OFDM,
 │   │                              pulse shaping, carrier/timing sync
 │   ├── image/                  <- image type, 2-D FFT/DCT, spatial
@@ -30,7 +30,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 142 unit tests
+│   └── test_all.c              <- 154 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -66,6 +66,7 @@ dependencies.
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
 | **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving |
 | **Adaptive filters** | LMS, NLMS, and RLS, for channel equalization, system identification, and noise cancellation |
+| **State estimation** | linear Kalman filter, Extended Kalman Filter, and tracking / sensor-fusion helpers |
 | **Modulation** | QPSK / 16-QAM / 64-QAM with soft demapping; multipath + AWGN channel; OFDM (IFFT/CP/FFT, per-subcarrier equalization); coded OFDM; RRC pulse shaping; carrier & timing recovery |
 | **Image processing** | grayscale image type with PGM I/O; 2-D FFT and DCT (incl. 8x8 JPEG block); Gaussian/box/sharpen/Sobel/Laplacian/median filters; histogram equalization; Otsu thresholding; 2-D Haar wavelet |
 | **Array processing** | uniform linear array model; delay-and-sum and MVDR/Capon beamforming; direction-of-arrival estimation by spatial MUSIC and ESPRIT |
@@ -119,6 +120,11 @@ dependencies.
   easy to tune), and RLS (O(L^2), fast convergence via a recursive
   least-squares update). The demo exercises all three on channel
   equalization, system identification, and noise cancellation.
+- **Kalman filtering** adds state estimation: a linear Kalman filter
+  (predict/update in general matrix form), the Extended Kalman Filter
+  for nonlinear systems (caller-supplied Jacobians), a constant-
+  velocity tracking set-up, and an inverse-variance sensor-fusion
+  helper. RLS is a special case of the Kalman filter.
 - **Modulation** provides Gray-coded QAM (QPSK/16/64) with hard and soft
   demapping, a multipath + AWGN channel model, and OFDM built directly
   on the FFT (IFFT modulator, cyclic prefix, per-subcarrier equalizer).
@@ -143,7 +149,7 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-142 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+154 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -161,6 +167,7 @@ QAM round-trips and unit-energy normalization, the multipath/AWGN
 channel, OFDM round-trips and per-subcarrier equalization, the
 end-to-end coded-OFDM chain, RRC energy/symmetry and carrier-PLL
 locking, LMS/NLMS/RLS convergence and adaptive noise cancellation,
+Kalman tracking / sensor fusion and EKF nonlinear tracking,
 advanced spectral estimation (AR/Burg model recovery, ARMA, and
 MUSIC/ESPRIT resolving closely spaced tones), time-frequency analysis
 (STFT chirp tracking and exact overlap-add inverse, QMF reconstruction,

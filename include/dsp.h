@@ -19,8 +19,9 @@
  *   coding/      - error detection (CRC, parity, checksum) and
  *                  forward error correction (Hamming, Reed-Solomon,
  *                  convolutional/Viterbi, LDPC), with interleaving
- *   adaptive/    - adaptive filters (LMS, NLMS, RLS) for equalization,
- *                  system identification, and noise cancellation
+ *   adaptive/    - adaptive filters (LMS, NLMS, RLS) and state
+ *                  estimation (Kalman filter, EKF) for equalization,
+ *                  system identification, tracking, and sensor fusion
  *   modulation/  - QAM, OFDM, channel model, the coded-OFDM
  *                  transceiver, pulse shaping, and carrier/timing
  *                  recovery
@@ -61,6 +62,7 @@
 #include "coding/interleave.h"
 
 #include "adaptive/adaptive.h"
+#include "adaptive/kalman.h"
 
 #include "modulation/qam.h"
 #include "modulation/channel.h"

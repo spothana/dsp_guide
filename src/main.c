@@ -651,6 +651,107 @@ static void demo_adaptive(void) {
     dsp_nlms_free(&nc);
 }
 
+/* ---- Kalman filtering & sensor fusion ------------------------------- */
+
+static unsigned kal_seed = 13579;
+static double kal_gauss(void) {
+    kal_seed = kal_seed * 1103515245u + 12345u;
+    double u1 = ((kal_seed >> 16) & 0xFFFF) / 65535.0;
+    kal_seed = kal_seed * 1103515245u + 12345u;
+    double u2 = ((kal_seed >> 16) & 0xFFFF) / 65535.0;
+    if (u1 < 1e-9) u1 = 1e-9;
+    return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+}
+
+static void demo_kalman(void) {
+    section("KALMAN FILTERING & SENSOR FUSION");
+
+    printf("The Kalman filter estimates the hidden state of a known\n");
+    printf("dynamic system from noisy measurements, via a predict /\n");
+    printf("update cycle. It is the optimal linear estimator and the\n");
+    printf("standard tool for tracking and sensor fusion.\n");
+
+    /* --- 1. Constant-velocity tracking --- */
+    enum { N = 80 };
+    double dt = 1.0, true_v = 2.5;
+    dsp_kalman kf;
+    dsp_kalman_tracker_init(&kf, 1, dt, 0.1, 4.0);
+    kf.x[0] = 0.0;  kf.x[1] = 0.0;          /* initial pos, vel */
+    kf.P[0] = 100.0; kf.P[3] = 100.0;       /* large initial doubt */
+
+    double err_raw = 0.0, err_kf = 0.0;
+    int cnt = 0;
+    for (int n = 0; n < N; ++n) {
+        double true_pos = true_v * dt * n;
+        double meas = true_pos + 4.0 * kal_gauss();
+        dsp_kalman_predict(&kf);
+        dsp_kalman_update(&kf, &meas);
+        if (n > 20) {                       /* after convergence */
+            err_raw += (meas - true_pos) * (meas - true_pos);
+            err_kf  += (kf.x[0] - true_pos) * (kf.x[0] - true_pos);
+            ++cnt;
+        }
+    }
+    printf("\n1. Constant-velocity tracking (position sensor, noise 4.0)\n");
+    printf("   RMS error - raw measurement: %.2f, Kalman estimate: %.2f\n",
+           sqrt(err_raw / cnt), sqrt(err_kf / cnt));
+    printf("   recovered velocity %.2f (true %.1f) - never measured\n",
+           kf.x[1], true_v);
+    printf("   -> the filter smooths position AND infers the hidden\n");
+    printf("      velocity from the position stream alone.\n");
+    dsp_kalman_free(&kf);
+
+    /* --- 2. Static sensor fusion --- */
+    double meas[3]  = { 10.4, 9.6, 10.1 };
+    double var[3]   = { 4.00, 1.00, 0.25 };   /* sensor 3 the best */
+    double fused_var;
+    double fused = dsp_kalman_fuse(meas, var, 3, &fused_var);
+    printf("\n2. Sensor fusion - 3 sensors of differing accuracy\n");
+    printf("   readings 10.4 / 9.6 / 10.1, variances 4.0 / 1.0 / 0.25\n");
+    printf("   fused estimate %.3f, fused variance %.3f\n",
+           fused, fused_var);
+    printf("   -> inverse-variance weighting: the fused variance "
+           "(%.3f)\n", fused_var);
+    printf("      is below even the best single sensor (0.25).\n");
+
+    /* --- 3. Kalman fusion of two sensors over time --- */
+    dsp_kalman kf2;
+    dsp_kalman_init(&kf2, 2, 2);             /* state [pos,vel], 2 meas */
+    kf2.F[0] = 1.0; kf2.F[1] = 1.0; kf2.F[3] = 1.0;
+    kf2.Q[0] = 0.01; kf2.Q[3] = 0.01;
+    kf2.H[0] = 1.0; kf2.H[2] = 1.0;          /* both sense position */
+    kf2.R[0] = 4.0; kf2.R[3] = 0.5;          /* sensor B 8x sharper */
+    kf2.x[0] = 0.0; kf2.x[1] = 0.0;
+    kf2.P[0] = 100.0; kf2.P[3] = 100.0;
+
+    double err_a = 0.0, err_b = 0.0, err_f = 0.0;
+    cnt = 0;
+    for (int n = 0; n < N; ++n) {
+        double tp = 2.0 * n;
+        double za = tp + 2.00 * kal_gauss();   /* noisy sensor A */
+        double zb = tp + 0.71 * kal_gauss();   /* sharp sensor B */
+        double z[2] = { za, zb };
+        dsp_kalman_predict(&kf2);
+        dsp_kalman_update(&kf2, z);
+        if (n > 20) {
+            err_a += (za - tp) * (za - tp);
+            err_b += (zb - tp) * (zb - tp);
+            err_f += (kf2.x[0] - tp) * (kf2.x[0] - tp);
+            ++cnt;
+        }
+    }
+    printf("\n3. Kalman fusion of two position sensors over time\n");
+    printf("   RMS error - sensor A: %.2f, sensor B: %.2f, fused: %.2f\n",
+           sqrt(err_a / cnt), sqrt(err_b / cnt), sqrt(err_f / cnt));
+    printf("   -> the fused track beats even the better sensor: the\n");
+    printf("      update step weights each reading by its precision.\n");
+    dsp_kalman_free(&kf2);
+
+    printf("\nThe Extended Kalman Filter (dsp_ekf) handles nonlinear\n");
+    printf("systems - radar range/bearing, GPS - by linearising the\n");
+    printf("model at each step through caller-supplied Jacobians.\n");
+}
+
 /* ---- Interleaving ---------------------------------------------------- */
 
 static void demo_interleaving(void) {
@@ -1216,6 +1317,7 @@ int main(void) {
     demo_ldpc();
     demo_interleaving();
     demo_adaptive();
+    demo_kalman();
     demo_ofdm();
     demo_coded_ofdm();
     demo_sync();

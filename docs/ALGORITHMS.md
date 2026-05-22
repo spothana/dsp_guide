@@ -319,6 +319,44 @@ identification (learn an unknown impulse response), noise and echo
 cancellation (subtract noise correlated with a reference), prediction,
 and beamforming.
 
+## Kalman filtering and state estimation
+
+Adaptive filters *learn an unknown system*. The Kalman filter solves a
+different problem: it *estimates the hidden state* of a *known* dynamic
+system from noisy measurements. It keeps a state estimate and a
+covariance (how uncertain that estimate is), and runs a two-phase cycle.
+
+| Phase | Effect on the state | Effect on uncertainty |
+|---|---|---|
+| Predict | Advance by the motion model `x ← F x` | Grows: `P ← F P Fᵀ + Q` |
+| Update | Correct toward the measurement | Shrinks: `P ← (I − K H) P` |
+
+The **Kalman gain** `K = P Hᵀ S⁻¹` is the heart of it: it weighs the
+model against the measurement by their relative uncertainty. A precise
+measurement pulls the estimate hard; a noisy one barely moves it. For a
+linear system with Gaussian noise the Kalman filter is the optimal
+(minimum-mean-square-error) estimator.
+
+**Sensor fusion** is the headline use. Several noisy sensors measure the
+same quantity; the update step naturally combines them, each pulling the
+estimate in proportion to its precision, so the fused estimate beats any
+single sensor. The static, single-sample form is inverse-variance
+weighting: fuse readings with weights `1/variance`, and the fused
+variance drops below every individual sensor's. A GPS + IMU navigation
+filter is the classic running example.
+
+The **Extended Kalman Filter (EKF)** handles *nonlinear* systems —
+radar range/bearing, GPS — by linearising the model at each step:
+the caller supplies the nonlinear transition and measurement functions
+plus their Jacobians, and the EKF propagates the covariance through
+those Jacobians. It is the standard nonlinear estimator, though (unlike
+the linear filter) no longer provably optimal.
+
+Connection to the adaptive filters above: **RLS is a Kalman filter** for
+a particular state model — the "state" being the filter weights, assumed
+constant. The two share the recursive predict/correct structure; the
+Kalman filter is the general form.
+
 ## Modulation — QAM and OFDM
 
 How bits become a transmitted waveform, and how a receiver gets them

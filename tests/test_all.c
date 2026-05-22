@@ -980,6 +980,185 @@ static void test_adaptive_noise_cancellation(void) {
     dsp_nlms_free(&f);
 }
 
+/* ---- adaptive: Kalman filtering & state estimation ------------------ */
+
+/* A reproducible Gaussian sample for the Kalman tests. */
+static unsigned kt_seed = 0xBEEF;
+static double kt_gauss(void) {
+    kt_seed = kt_seed * 1103515245u + 12345u;
+    double u1 = ((kt_seed >> 16) & 0xFFFF) / 65535.0;
+    kt_seed = kt_seed * 1103515245u + 12345u;
+    double u2 = ((kt_seed >> 16) & 0xFFFF) / 65535.0;
+    if (u1 < 1e-9) u1 = 1e-9;
+    return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+}
+
+static void test_kalman_fuse_precision_weighting(void) {
+    printf("[adaptive] sensor fusion is inverse-variance weighted\n");
+    /* Two sensors: a noisy one and a precise one. The fused estimate
+     * must lie much closer to the precise sensor's reading. */
+    double meas[2] = { 0.0, 10.0 };
+    double var[2]  = { 100.0, 1.0 };          /* sensor 2 far better */
+    double fv;
+    double f = dsp_kalman_fuse(meas, var, 2, &fv);
+    CHECK(f > 9.0,
+          "the fused estimate is pulled toward the precise sensor");
+    CHECK(fv < 1.0,
+          "the fused variance is below the best single sensor");
+}
+
+static void test_kalman_fuse_equal_sensors(void) {
+    printf("[adaptive] fusing equal sensors averages and sharpens\n");
+    /* N identical-variance sensors: the fused value is their mean and
+     * the fused variance is var/N. */
+    double meas[4] = { 4.0, 6.0, 5.0, 5.0 };
+    double var[4]  = { 2.0, 2.0, 2.0, 2.0 };
+    double fv;
+    double f = dsp_kalman_fuse(meas, var, 4, &fv);
+    CHECK(close(f, 5.0, 1e-9), "fused estimate equals the mean");
+    CHECK(close(fv, 2.0 / 4.0, 1e-9),
+          "fused variance equals var / N");
+}
+
+static void test_kalman_predict_grows_covariance(void) {
+    printf("[adaptive] the predict step grows the state covariance\n");
+    dsp_kalman kf;
+    dsp_kalman_init(&kf, 2, 1);
+    /* Constant-velocity model. */
+    kf.F[0] = 1.0; kf.F[1] = 1.0; kf.F[3] = 1.0;
+    kf.Q[0] = 0.5; kf.Q[3] = 0.5;
+    kf.P[0] = 1.0; kf.P[3] = 1.0;
+
+    double trace_before = kf.P[0] + kf.P[3];
+    dsp_kalman_predict(&kf);
+    double trace_after = kf.P[0] + kf.P[3];
+
+    CHECK(trace_after > trace_before,
+          "uncertainty increases when no measurement is folded in");
+    dsp_kalman_free(&kf);
+}
+
+static void test_kalman_update_shrinks_covariance(void) {
+    printf("[adaptive] the update step shrinks the state covariance\n");
+    dsp_kalman kf;
+    dsp_kalman_init(&kf, 2, 1);
+    kf.F[0] = 1.0; kf.F[1] = 1.0; kf.F[3] = 1.0;
+    kf.Q[0] = 0.01; kf.Q[3] = 0.01;
+    kf.H[0] = 1.0;                           /* position is measured */
+    kf.R[0] = 1.0;
+    kf.P[0] = 50.0; kf.P[3] = 50.0;
+
+    double trace_before = kf.P[0] + kf.P[3];
+    double z = 3.0;
+    int rc = dsp_kalman_update(&kf, &z);
+    double trace_after = kf.P[0] + kf.P[3];
+
+    CHECK(rc == 0, "the update completes");
+    CHECK(trace_after < trace_before,
+          "folding in a measurement reduces uncertainty");
+    dsp_kalman_free(&kf);
+}
+
+static void test_kalman_tracker_beats_raw(void) {
+    printf("[adaptive] the CV tracker beats the raw measurements\n");
+    enum { N = 120 };
+    dsp_kalman kf;
+    int rc = dsp_kalman_tracker_init(&kf, 1, 1.0, 0.1, 5.0);
+    CHECK(rc == 0, "the constant-velocity tracker initialises");
+
+    kf.x[0] = 0.0; kf.x[1] = 0.0;
+    kf.P[0] = 100.0; kf.P[3] = 100.0;
+
+    double err_raw = 0.0, err_kf = 0.0;
+    int cnt = 0;
+    for (int n = 0; n < N; ++n) {
+        double true_pos = 1.5 * n;            /* velocity 1.5 */
+        double meas = true_pos + 5.0 * kt_gauss();
+        dsp_kalman_predict(&kf);
+        dsp_kalman_update(&kf, &meas);
+        if (n > 30) {
+            err_raw += (meas - true_pos) * (meas - true_pos);
+            err_kf  += (kf.x[0] - true_pos) * (kf.x[0] - true_pos);
+            ++cnt;
+        }
+    }
+    CHECK(cnt > 0 && err_kf < err_raw,
+          "the Kalman estimate has lower error than the raw signal");
+    dsp_kalman_free(&kf);
+}
+
+static void test_kalman_tracker_recovers_velocity(void) {
+    printf("[adaptive] the CV tracker infers the hidden velocity\n");
+    enum { N = 200 };
+    dsp_kalman kf;
+    dsp_kalman_tracker_init(&kf, 1, 1.0, 0.05, 3.0);
+    kf.x[0] = 0.0; kf.x[1] = 0.0;
+    kf.P[0] = 100.0; kf.P[3] = 100.0;
+
+    double true_v = 2.0;
+    for (int n = 0; n < N; ++n) {
+        double meas = true_v * n + 3.0 * kt_gauss();
+        dsp_kalman_predict(&kf);
+        dsp_kalman_update(&kf, &meas);
+    }
+    /* Velocity is never measured directly - only inferred. */
+    CHECK(fabs(kf.x[1] - true_v) < 0.5,
+          "the estimated velocity converges near the true value");
+    dsp_kalman_free(&kf);
+}
+
+/* --- EKF model for a 1-D nonlinear test ---
+ * State [x, v]; the measurement is the SQUARE of position, z = x^2,
+ * a nonlinear map with Jacobian dz/dx = 2x. With x > 0 it stays
+ * observable, so the EKF can track it. */
+static void ekf_f(const double *x, size_t n, double *xn, void *u) {
+    (void)n; (void)u;
+    xn[0] = x[0] + x[1];
+    xn[1] = x[1];
+}
+static void ekf_fjac(const double *x, size_t n, double *F, void *u) {
+    (void)x; (void)u;
+    for (size_t i = 0; i < n * n; ++i) F[i] = 0.0;
+    F[0] = 1.0; F[1] = 1.0; F[3] = 1.0;
+}
+static void ekf_h(const double *x, size_t n, double *z,
+                   size_t m, void *u) {
+    (void)n; (void)m; (void)u;
+    z[0] = x[0] * x[0];
+}
+static void ekf_hjac(const double *x, size_t n, double *H,
+                      size_t m, void *u) {
+    (void)n; (void)m; (void)u;
+    H[0] = 2.0 * x[0];
+    H[1] = 0.0;
+}
+
+static void test_ekf_tracks_nonlinear(void) {
+    printf("[adaptive] the EKF tracks a nonlinear measurement model\n");
+    enum { N = 120 };
+    dsp_ekf ekf;
+    int rc = dsp_ekf_init(&ekf, 2, 1);
+    CHECK(rc == 0, "the EKF initialises");
+
+    ekf.f = ekf_f; ekf.h = ekf_h;
+    ekf.Fjac = ekf_fjac; ekf.Hjac = ekf_hjac;
+    ekf.base.Q[0] = 0.001; ekf.base.Q[3] = 0.001;
+    ekf.base.R[0] = 1.0;
+    ekf.base.x[0] = 12.0; ekf.base.x[1] = 0.5;   /* rough guess */
+    ekf.base.P[0] = 5.0;  ekf.base.P[3] = 5.0;
+
+    double true_x = 10.0, true_v = 0.3;
+    for (int n = 0; n < N; ++n) {
+        true_x += true_v;
+        double z = true_x * true_x + 1.0 * kt_gauss();
+        dsp_ekf_predict(&ekf);
+        dsp_ekf_update(&ekf, &z);
+    }
+    CHECK(fabs(ekf.base.x[0] - true_x) < 2.0,
+          "the EKF position estimate converges to the true track");
+    dsp_ekf_free(&ekf);
+}
+
 /* ---- coding: interleaving -------------------------------------------- */
 
 static void test_block_interleave_roundtrip(void) {
@@ -2106,6 +2285,14 @@ int main(void) {
     test_rls_converges_fast();
     test_rls_beats_lms_early();
     test_adaptive_noise_cancellation();
+
+    test_kalman_fuse_precision_weighting();
+    test_kalman_fuse_equal_sensors();
+    test_kalman_predict_grows_covariance();
+    test_kalman_update_shrinks_covariance();
+    test_kalman_tracker_beats_raw();
+    test_kalman_tracker_recovers_velocity();
+    test_ekf_tracks_nonlinear();
 
     printf("\n============================\n");
     printf("Tests run: %d   Passed: %d   Failed: %d\n",
