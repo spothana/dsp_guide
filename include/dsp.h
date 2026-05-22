@@ -11,7 +11,8 @@
  *   transforms/  - DFT, FFT, DCT          (time <-> frequency)
  *   filtering/   - FIR, IIR               (frequency-selective filters)
  *   operations/  - convolution, correlation
- *   spectral/    - window functions       (leakage reduction)
+ *   spectral/    - window functions (leakage reduction) and advanced
+ *                  spectral estimation (AR, ARMA, MUSIC, ESPRIT)
  *   sampling/    - decimation, interpolation, rational resampling
  *   wavelet/     - discrete wavelet transform (multi-resolution)
  *   coding/      - error detection (CRC, parity, checksum) and
@@ -44,6 +45,7 @@
 #include "operations/correlation.h"
 
 #include "spectral/window.h"
+#include "spectral/estimation.h"
 
 #include "sampling/resample.h"
 

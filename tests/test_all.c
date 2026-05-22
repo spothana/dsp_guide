@@ -275,6 +275,175 @@ static void test_window_leakage_order(void) {
           "Hanning and Blackman start lower than Rectangular");
 }
 
+/* ---- spectral: advanced estimation (AR, ARMA, MUSIC, ESPRIT) -------- */
+
+/* Build a test signal: two real tones plus a little noise. */
+static void estim_make_two_tones(double *x, size_t n,
+                                 double f1, double f2,
+                                 double noise_amp, unsigned seed) {
+    for (size_t i = 0; i < n; ++i) {
+        seed = seed * 1103515245u + 12345u;
+        double noise = ((double)((seed >> 16) & 0xFFFF) / 65535.0) - 0.5;
+        x[i] = cos(2.0 * M_PI * f1 * (double)i)
+             + cos(2.0 * M_PI * f2 * (double)i)
+             + noise_amp * noise;
+    }
+}
+
+/* Index of the highest interior peak of a spectrum. */
+static size_t estim_peak_bin(const double *p, size_t nf) {
+    size_t best = 1;
+    for (size_t i = 1; i + 1 < nf; ++i)
+        if (p[i] > p[i - 1] && p[i] > p[i + 1] && p[i] > p[best])
+            best = i;
+    return best;
+}
+
+/* True if the spectrum has a clear peak near `target` (within tol). */
+static int estim_has_peak_near(const double *p, size_t nf,
+                               double target, double tol) {
+    for (size_t i = 1; i + 1 < nf; ++i) {
+        if (p[i] > p[i - 1] && p[i] > p[i + 1]) {
+            double f = 0.5 * (double)i / (double)nf;
+            if (fabs(f - target) < tol)
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static void test_autocorr_zero_lag(void) {
+    printf("[spectral] autocorrelation at lag 0 is the signal power\n");
+    enum { N = 200 };
+    double x[N], r[3];
+    double power = 0.0;
+    for (int i = 0; i < N; ++i) {
+        x[i] = sin(0.3 * i);
+        power += x[i] * x[i];
+    }
+    power /= N;
+    dsp_autocorr(x, N, 2, r);
+    CHECK(close(r[0], power, 1e-9),
+          "r[0] equals the mean-squared value of the signal");
+}
+
+static void test_ar_yule_walker_single_tone(void) {
+    printf("[spectral] AR Yule-Walker locates a single tone\n");
+    enum { N = 256, P = 8, NF = 1000 };
+    double x[N];
+    for (int i = 0; i < N; ++i)
+        x[i] = cos(2.0 * M_PI * 0.17 * i);
+
+    double r[P + 1], a[P], sigma2;
+    dsp_autocorr(x, N, P, r);
+    int rc = dsp_ar_yule_walker(r, P, a, &sigma2);
+    CHECK(rc == 0, "Yule-Walker solves without a singular correlation");
+
+    double psd[NF];
+    dsp_ar_psd(a, P, sigma2, psd, NF);
+    double f = 0.5 * (double)estim_peak_bin(psd, NF) / NF;
+    CHECK(fabs(f - 0.17) < 0.01,
+          "AR spectrum peaks at the tone frequency");
+}
+
+static void test_ar_burg_two_close_tones(void) {
+    printf("[spectral] AR Burg resolves two closely spaced tones\n");
+    enum { N = 64, P = 14, NF = 1000 };
+    double x[N];
+    estim_make_two_tones(x, N, 0.20, 0.23, 0.05, 4321);
+
+    double a[P], sigma2, psd[NF];
+    int rc = dsp_ar_burg(x, N, P, a, &sigma2);
+    CHECK(rc == 0, "Burg's method completes");
+
+    dsp_ar_psd(a, P, sigma2, psd, NF);
+    int ok = estim_has_peak_near(psd, NF, 0.20, 0.02)
+          && estim_has_peak_near(psd, NF, 0.23, 0.02);
+    CHECK(ok, "Burg spectrum shows both tones as separate peaks");
+}
+
+static void test_ar_burg_matches_known_model(void) {
+    printf("[spectral] AR Burg recovers a known AR(2) model\n");
+    enum { N = 300, P = 2 };
+    /* A pure sinusoid is an undamped AR(2) process; the coefficients
+     * are a[0] = -2 cos(omega), a[1] = 1. */
+    double x[N];
+    double omega = 2.0 * M_PI * 0.12;
+    for (int i = 0; i < N; ++i)
+        x[i] = cos(omega * i);
+
+    double a[P], sigma2;
+    dsp_ar_burg(x, N, P, a, &sigma2);
+    CHECK(fabs(a[0] - (-2.0 * cos(omega))) < 0.05 &&
+          fabs(a[1] - 1.0) < 0.05,
+          "Burg AR(2) coefficients match the analytic values");
+}
+
+static void test_arma_estimate_runs(void) {
+    printf("[spectral] ARMA estimation produces a usable spectrum\n");
+    enum { N = 128, P = 4, Q = 2, NF = 1000 };
+    double x[N];
+    estim_make_two_tones(x, N, 0.15, 0.30, 0.05, 9090);
+
+    double a[P], b[Q + 1];
+    int rc = dsp_arma_estimate(x, N, P, Q, a, b);
+    CHECK(rc == 0, "ARMA estimation completes");
+
+    double psd[NF];
+    dsp_arma_psd(a, P, b, Q, psd, NF);
+    /* The PSD must be finite and non-negative everywhere. */
+    int ok = 1;
+    for (int i = 0; i < NF; ++i)
+        if (!(psd[i] >= 0.0) || psd[i] > 1e290) ok = 0;
+    CHECK(ok, "the ARMA PSD is finite and non-negative");
+}
+
+static void test_music_resolves_close_tones(void) {
+    printf("[spectral] MUSIC resolves two closely spaced tones\n");
+    enum { N = 64, NF = 1000 };
+    double x[N];
+    estim_make_two_tones(x, N, 0.20, 0.23, 0.05, 20240);
+
+    double pseudo[NF];
+    int rc = dsp_music(x, N, 2, 16, pseudo, NF);
+    CHECK(rc == 0, "MUSIC completes for a 2-source signal");
+
+    int ok = estim_has_peak_near(pseudo, NF, 0.20, 0.015)
+          && estim_has_peak_near(pseudo, NF, 0.23, 0.015);
+    CHECK(ok, "the MUSIC pseudospectrum peaks at both tones");
+}
+
+static void test_music_rejects_bad_params(void) {
+    printf("[spectral] MUSIC rejects an undersized covariance matrix\n");
+    enum { N = 64, NF = 100 };
+    double x[N], pseudo[NF];
+    for (int i = 0; i < N; ++i) x[i] = cos(0.4 * i);
+    /* msize must exceed 2*nsources; 4 is too small for 2 sources. */
+    CHECK(dsp_music(x, N, 2, 4, pseudo, NF) == -1,
+          "msize <= 2*nsources is rejected");
+}
+
+static void test_esprit_estimates_frequencies(void) {
+    printf("[spectral] ESPRIT estimates two well-separated tones\n");
+    enum { N = 256 };
+    double x[N];
+    for (int i = 0; i < N; ++i)
+        x[i] = cos(2.0 * M_PI * 0.10 * i)
+             + cos(2.0 * M_PI * 0.30 * i);
+
+    double freqs[2];
+    int ne = dsp_esprit(x, N, 2, 20, freqs);
+    CHECK(ne == 2, "ESPRIT returns two frequency estimates");
+
+    /* Each true tone should be matched by one estimate (either order). */
+    int near10 = (fabs(freqs[0] - 0.10) < 0.02)
+              || (fabs(freqs[1] - 0.10) < 0.02);
+    int near30 = (fabs(freqs[0] - 0.30) < 0.02)
+              || (fabs(freqs[1] - 0.30) < 0.02);
+    CHECK(near10 && near30,
+          "both tones are recovered within tolerance");
+}
+
 /* ---- sampling ------------------------------------------------------- */
 
 static void test_decimate_length(void) {
@@ -1498,6 +1667,15 @@ int main(void) {
     test_window_endpoints();
     test_window_symmetry();
     test_window_leakage_order();
+
+    test_autocorr_zero_lag();
+    test_ar_yule_walker_single_tone();
+    test_ar_burg_two_close_tones();
+    test_ar_burg_matches_known_model();
+    test_arma_estimate_runs();
+    test_music_resolves_close_tones();
+    test_music_rejects_bad_params();
+    test_esprit_estimates_frequencies();
 
     test_decimate_length();
     test_interpolate_length_and_zeros();

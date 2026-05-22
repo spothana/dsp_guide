@@ -61,6 +61,49 @@ convolution is `X·H`, correlation is `X·conj(Y)`.
 The fundamental trade-off is **main-lobe width vs side-lobe level**: you
 cannot have both fine frequency resolution and low leakage.
 
+## Advanced spectral estimation
+
+The FFT periodogram (which the windows above prepare a signal for) has a
+resolution fixed by the record length — two tones closer than about 1/N
+blur into one peak. Advanced estimators do better by assuming structure.
+
+| Method | Type | Resolution | Cost | Best when |
+|---|---|---|---|---|
+| AR | Parametric | High | Low–medium | Short records, sharp resonant peaks |
+| ARMA | Parametric | High | High | Spectra with both peaks and notches |
+| MUSIC | Subspace | Very high | High (grid search) | Closely spaced tones, direction finding |
+| ESPRIT | Subspace | Very high | Medium | Fast estimation, no spectral search |
+
+**Parametric methods** fit a model and read the spectrum off the model
+parameters. **AR** treats the signal as an all-pole filter driven by
+white noise; its coefficients come from the Yule-Walker equations
+(solved efficiently by the Levinson-Durbin recursion) or from Burg's
+forward-backward method, which is often more accurate for short records.
+**ARMA** adds a moving-average (zeros) part for spectra that have notches
+as well as peaks; its parameters are harder to fit, here via the
+modified Yule-Walker method (AR part from the high-lag autocorrelations,
+MA part from the residual).
+
+**Subspace methods** split the data's covariance matrix, via an
+eigen-decomposition, into a signal subspace (the large eigenvalues) and a
+noise subspace (the small ones). **MUSIC** forms a pseudospectrum whose
+peaks — where a steering vector is orthogonal to the noise subspace —
+mark the tone frequencies. **ESPRIT** instead exploits the shift-
+invariance of the signal subspace to solve for the frequencies directly,
+with no spectral search. Both reach "super-resolution": they separate
+tones far closer than the FFT's 1/N bin width.
+
+The eigen-decomposition here uses the Jacobi method — repeated plane
+rotations that zero the largest off-diagonal element — which suits the
+small symmetric covariance matrices these estimators build. ESPRIT
+recovers each tone from the eigenvalues of a shift-rotation matrix; its
+accuracy is good but somewhat more sensitive to the covariance-matrix
+size than MUSIC or the AR methods.
+
+These methods are the workhorses of radar and sonar, array signal
+processing (direction-of-arrival estimation), tone detection, and speech
+analysis — anywhere the FFT's resolution falls short.
+
 ## Sample rate conversion
 
 | Operation | Effect | Filter placement |

@@ -16,7 +16,7 @@ dsp_guide/
 │   ├── transforms/             <- dft, fft, dct
 │   ├── filtering/              <- fir, iir
 │   ├── operations/             <- convolution, correlation
-│   ├── spectral/               <- window functions
+│   ├── spectral/               <- window functions, AR/ARMA/MUSIC/ESPRIT
 │   ├── sampling/               <- decimation, interpolation, resampling
 │   ├── wavelet/                <- discrete wavelet transform
 │   ├── coding/                 <- error detection, FEC, interleaving
@@ -28,7 +28,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 105 unit tests
+│   └── test_all.c              <- 118 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -59,7 +59,7 @@ dependencies.
 | **Frequency-domain transforms** | DFT, FFT (radix-2 Cooley-Tukey), DCT-II/III |
 | **Digital filtering** | FIR (windowed-sinc design), IIR (biquad, RBJ design) |
 | **Signal operations** | Convolution (direct + FFT), cross/auto-correlation |
-| **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows |
+| **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows; advanced estimation (AR via Yule-Walker & Burg, ARMA, MUSIC, ESPRIT) |
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
 | **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving |
@@ -83,6 +83,12 @@ dependencies.
   multiplication duality.
 - **Wavelet** transform uses the Haar basis via Mallat's pyramid
   algorithm; the round-trip is numerically exact.
+- **Advanced spectral estimation** goes beyond the FFT periodogram: AR
+  modelling via the Yule-Walker equations (Levinson-Durbin recursion)
+  and Burg's forward-backward method, ARMA via the modified
+  Yule-Walker method, and the MUSIC and ESPRIT subspace methods built
+  on a Jacobi eigensolver. These resolve tones far closer than the
+  FFT's 1/N bin width.
 - **Error detection** covers parity, the 16-bit Internet checksum, and
   table-driven CRC-32 (Ethernet polynomial).
 - **Forward error correction** implements Hamming(7,4) (syndrome
@@ -125,7 +131,7 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-105 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+118 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -143,6 +149,7 @@ QAM round-trips and unit-energy normalization, the multipath/AWGN
 channel, OFDM round-trips and per-subcarrier equalization, the
 end-to-end coded-OFDM chain, RRC energy/symmetry and carrier-PLL
 locking, LMS/NLMS/RLS convergence and adaptive noise cancellation,
-and the image module - 2-D FFT/DCT/wavelet round-trips, 8x8
+advanced spectral estimation (AR/Burg model recovery, ARMA, and
+MUSIC/ESPRIT resolving closely spaced tones), and the image module - 2-D FFT/DCT/wavelet round-trips, 8x8
 DCT compaction, spatial filters, the median filter, histograms, and
 Otsu thresholding.

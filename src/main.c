@@ -143,6 +143,99 @@ static void demo_spectral(void) {
     }
 }
 
+/* ---- Advanced spectral estimation ----------------------------------- */
+
+/* Locate the two highest interior peaks of a spectrum/pseudospectrum. */
+static void find_two_peaks(const double *p, size_t nf,
+                           double *f1, double *f2) {
+    double best1 = -1.0, best2 = -1.0;
+    size_t i1 = 0, i2 = 0;
+    for (size_t i = 1; i + 1 < nf; ++i) {
+        if (p[i] > p[i - 1] && p[i] > p[i + 1]) {
+            if (p[i] > best1) {
+                best2 = best1; i2 = i1;
+                best1 = p[i];  i1 = i;
+            } else if (p[i] > best2) {
+                best2 = p[i];  i2 = i;
+            }
+        }
+    }
+    *f1 = 0.5 * (double)i1 / (double)nf;
+    *f2 = 0.5 * (double)i2 / (double)nf;
+}
+
+static void demo_estimation(void) {
+    section("ADVANCED SPECTRAL ESTIMATION (AR, ARMA, MUSIC, ESPRIT)");
+
+    /* Two closely spaced tones in a SHORT, noisy record. The FFT bin
+     * width here is 1/N = 1/64 ~ 0.016, and the tones sit only 0.03
+     * apart - right at the edge of what the FFT can resolve. */
+    enum { N = 64 };
+    double x[N];
+    unsigned seed = 20240;
+    for (int n = 0; n < N; ++n) {
+        seed = seed * 1103515245u + 12345u;
+        double noise = ((double)((seed >> 16) & 0xFFFF) / 65535.0) - 0.5;
+        x[n] = cos(2.0 * M_PI * 0.20 * n)
+             + cos(2.0 * M_PI * 0.23 * n)
+             + 0.10 * noise;
+    }
+    printf("Test signal: two tones at f = 0.20 and 0.23, in a short\n");
+    printf("64-sample record. The FFT bin width (~0.016) barely\n");
+    printf("separates them; these methods resolve them cleanly.\n");
+
+    enum { ORDER = 14, NF = 1000 };
+
+    /* AR via Yule-Walker (Levinson-Durbin). */
+    double r[ORDER + 1];
+    dsp_autocorr(x, N, ORDER, r);
+    double a_yw[ORDER], sig_yw;
+    double psd[NF], f1, f2;
+    dsp_ar_yule_walker(r, ORDER, a_yw, &sig_yw);
+    dsp_ar_psd(a_yw, ORDER, sig_yw, psd, NF);
+    find_two_peaks(psd, NF, &f1, &f2);
+    printf("\nAR - Yule-Walker (all-pole model, Levinson-Durbin):\n");
+    printf("  spectral peaks at f = %.3f and %.3f\n", f1, f2);
+
+    /* AR via Burg's method. */
+    double a_bg[ORDER], sig_bg;
+    dsp_ar_burg(x, N, ORDER, a_bg, &sig_bg);
+    dsp_ar_psd(a_bg, ORDER, sig_bg, psd, NF);
+    find_two_peaks(psd, NF, &f1, &f2);
+    printf("\nAR - Burg (forward-backward, maximum entropy):\n");
+    printf("  spectral peaks at f = %.3f and %.3f\n", f1, f2);
+
+    /* ARMA via the modified Yule-Walker method. */
+    double arma_a[6], arma_b[5];
+    if (dsp_arma_estimate(x, N, 6, 4, arma_a, arma_b) == 0) {
+        dsp_arma_psd(arma_a, 6, arma_b, 4, psd, NF);
+        find_two_peaks(psd, NF, &f1, &f2);
+        printf("\nARMA - poles and zeros (modified Yule-Walker):\n");
+        printf("  spectral peaks at f = %.3f and %.3f\n", f1, f2);
+    }
+
+    /* MUSIC subspace pseudospectrum. */
+    double pmusic[NF];
+    if (dsp_music(x, N, 2, 16, pmusic, NF) == 0) {
+        find_two_peaks(pmusic, NF, &f1, &f2);
+        printf("\nMUSIC - subspace pseudospectrum (super-resolution):\n");
+        printf("  pseudospectrum peaks at f = %.3f and %.3f\n", f1, f2);
+    }
+
+    /* ESPRIT - direct frequency estimates, no spectral search. */
+    double freqs[2];
+    int ne = dsp_esprit(x, N, 2, 16, freqs);
+    if (ne > 0) {
+        printf("\nESPRIT - direct estimate, no grid search:\n");
+        printf("  frequencies:");
+        for (int i = 0; i < ne; ++i) printf(" %.3f", freqs[i]);
+        printf("\n");
+    }
+
+    printf("\n-> every method recovers the 0.20 / 0.23 pair that the\n");
+    printf("   classical FFT periodogram would blur into one lobe.\n");
+}
+
 /* ---- Sample rate conversion ----------------------------------------- */
 
 static void demo_sampling(void) {
@@ -910,6 +1003,7 @@ int main(void) {
     demo_filtering();
     demo_operations();
     demo_spectral();
+    demo_estimation();
     demo_sampling();
     demo_wavelet();
     demo_detection();
