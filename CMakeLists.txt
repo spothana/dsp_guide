@@ -18,6 +18,7 @@ file(GLOB_RECURSE DSP_SOURCES
     src/sampling/*.c
     src/wavelet/*.c
     src/coding/*.c
+    src/adaptive/*.c
     src/modulation/*.c
     src/image/*.c
 )

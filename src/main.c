@@ -311,42 +311,128 @@ static void demo_correction(void) {
                 : "(FAIL)");
 }
 
-/* ---- Channel equalization ------------------------------------------- */
+/* ---- Adaptive filters ------------------------------------------------ */
 
-static void demo_equalization(void) {
-    section("CHANNEL EQUALIZATION (LMS adaptive filter)");
+/* Fill an array with pseudo-random +/-1 (or uniform) values. */
+static unsigned adapt_seed = 24680;
+static double adapt_rand(void) {
+    adapt_seed = adapt_seed * 1103515245u + 12345u;
+    return ((double)((adapt_seed >> 16) & 0xFFFF) / 65535.0) * 2.0 - 1.0;
+}
 
-    /* A known training sequence (+1/-1 symbols). */
-    enum { N = 400 };
-    double tx[N], rx[N];
-    unsigned seed = 12345;
-    for (int i = 0; i < N; ++i) {
-        seed = seed * 1103515245u + 12345u;
-        tx[i] = ((seed >> 16) & 1) ? 1.0 : -1.0;
+static void demo_adaptive(void) {
+    section("ADAPTIVE FILTERS (LMS, NLMS, RLS)");
+
+    printf("Three algorithms on a convergence-vs-cost spectrum:\n");
+    printf("  LMS  - O(L), simple, slow, step-size sensitive\n");
+    printf("  NLMS - O(L), power-normalised step, easy to tune\n");
+    printf("  RLS  - O(L^2), fast convergence, tracks change well\n");
+
+    enum { L = 8, N = 1500 };
+
+    /* --- Application 1: system identification ----------------------
+     * An unknown FIR system; each filter must learn its taps from the
+     * input/output pair alone. */
+    double sys[L] = { 0.8, -0.5, 0.3, 0.25, -0.15, 0.1, -0.05, 0.02 };
+    double x[N], d[N];
+    for (int n = 0; n < N; ++n) x[n] = adapt_rand();
+    for (int n = 0; n < N; ++n) {
+        double a = 0.0;
+        for (int k = 0; k < L; ++k)
+            if (n >= k) a += sys[k] * x[n - k];
+        d[n] = a;
     }
 
-    /* A simple 2-tap multipath channel: a delayed echo smears symbols. */
+    dsp_lms  lms;  dsp_lms_init(&lms,  L, 0.05);
+    dsp_nlms nlms; dsp_nlms_init(&nlms, L, 0.5, 1e-6);
+    dsp_rls  rls;  dsp_rls_init(&rls,  L, 0.99, 100.0);
+
+    /* Early MSE (first 50 samples) measures convergence speed. */
+    double l_early = dsp_lms_train(&lms,  x, d, 50);
+    double n_early = dsp_nlms_train(&nlms, x, d, 50);
+    double r_early = dsp_rls_train(&rls,  x, d, 50);
+    /* Train on the rest to let every filter settle. */
+    dsp_lms_train(&lms,  x + 50, d + 50, N - 50);
+    dsp_nlms_train(&nlms, x + 50, d + 50, N - 50);
+    dsp_rls_train(&rls,  x + 50, d + 50, N - 50);
+
+    printf("\n1. System identification - learn an unknown 8-tap filter\n");
+    printf("   early MSE (first 50 samples, lower = faster convergence):\n");
+    printf("     LMS  %.5f   NLMS %.5f   RLS %.5f\n",
+           l_early, n_early, r_early);
+    double cerr = 0.0;
+    for (int k = 0; k < L; ++k) cerr += fabs(rls.weights[k] - sys[k]);
+    printf("   RLS recovered the system's taps, total error %.5f\n", cerr);
+    printf("   -> RLS converges fastest, NLMS next, LMS slowest.\n");
+
+    dsp_lms_free(&lms); dsp_nlms_free(&nlms); dsp_rls_free(&rls);
+
+    /* --- Application 2: channel equalization -----------------------
+     * A multipath channel smears symbols; the adaptive filter learns
+     * its inverse so the equalized output matches the sent symbols. */
+    double tx[N], rx[N];
+    for (int n = 0; n < N; ++n)
+        tx[n] = (adapt_rand() >= 0.0) ? 1.0 : -1.0;
     rx[0] = tx[0];
-    for (int i = 1; i < N; ++i)
-        rx[i] = tx[i] + 0.6 * tx[i - 1];
+    for (int n = 1; n < N; ++n)
+        rx[n] = tx[n] + 0.6 * tx[n - 1];      /* 2-tap echo */
 
-    dsp_lms eq;
-    dsp_lms_init(&eq, 9, 0.02);
+    dsp_nlms eq;
+    dsp_nlms_init(&eq, 9, 0.5, 1e-6);
+    double eq_early = dsp_nlms_train(&eq, rx, tx, N / 6);
+    dsp_nlms_train(&eq, rx + N / 6, tx + N / 6, N - N / 3);
+    double eq_late  = dsp_nlms_train(&eq, rx + 5 * N / 6,
+                                     tx + 5 * N / 6, N / 6);
+    printf("\n2. Channel equalization - undo a 2-tap multipath echo\n");
+    printf("   NLMS equalizer MSE: %.5f (early) -> %.5f (converged)\n",
+           eq_early, eq_late);
+    printf("   -> the cleaned signal is what a demapper/FEC then sees.\n");
+    dsp_nlms_free(&eq);
 
-    /* MSE over the first vs last quarter shows the filter converging. */
-    double mse_early = dsp_lms_train(&eq, rx, tx, N / 4);
-    dsp_lms_train(&eq, rx + N / 4, tx + N / 4, N / 2);
-    double mse_late  = dsp_lms_train(&eq, rx + 3 * N / 4,
-                                     tx + 3 * N / 4, N / 4);
+    /* --- Application 3: adaptive noise cancellation ----------------
+     * A clean signal is buried under noise. A reference input carries
+     * noise correlated with (but not equal to) the contaminating
+     * noise. The adaptive filter shapes the reference to match the
+     * noise, and the error signal is the recovered clean signal. */
+    enum { NC_N = 4000 };
+    double clean[NC_N], noise_ref[NC_N], primary[NC_N], recovered[NC_N];
+    for (int n = 0; n < NC_N; ++n) {
+        /* The signal we want back: a weak slow sine, buried in noise. */
+        clean[n] = 0.3 * sin(2.0 * M_PI * 0.01 * n);
+        noise_ref[n] = adapt_rand();
+    }
+    /* The primary input = clean signal + a filtered version of the
+     * reference noise (the path from noise source to the mic). */
+    for (int n = 0; n < NC_N; ++n) {
+        double leaked = 0.7 * noise_ref[n]
+                      + 0.3 * (n > 0 ? noise_ref[n - 1] : 0.0);
+        primary[n] = clean[n] + leaked;
+    }
 
-    printf("2-tap multipath channel (echo at 0.6x, one symbol late).\n");
-    printf("LMS equalizer, 9 taps, learns the channel inverse:\n");
-    printf("  mean-squared error, first quarter : %.5f\n", mse_early);
-    printf("  mean-squared error, last quarter  : %.5f\n", mse_late);
-    printf("-> error drops as the taps converge; the cleaned signal\n");
-    printf("   is what the FEC decoder then operates on.\n");
+    /* The filter adapts noise_ref toward the leaked noise; its error
+     * (primary - output) is the recovered clean signal. */
+    dsp_nlms nc;
+    dsp_nlms_init(&nc, 4, 0.2, 1e-6);
+    for (int n = 0; n < NC_N; ++n) {
+        double err;
+        dsp_nlms_update(&nc, noise_ref[n], primary[n], &err);
+        recovered[n] = err;          /* error == recovered clean signal */
+    }
 
-    dsp_lms_free(&eq);
+    /* Compare noise power before and after, over the settled tail. */
+    double in_noise = 0.0, out_noise = 0.0;
+    for (int n = 3 * NC_N / 4; n < NC_N; ++n) {
+        double before = primary[n]   - clean[n];
+        double after  = recovered[n] - clean[n];
+        in_noise  += before * before;
+        out_noise += after  * after;
+    }
+    printf("\n3. Adaptive noise cancellation - recover a buried signal\n");
+    printf("   residual noise power: %.4f (before) -> %.4f (after)\n",
+           in_noise / (NC_N / 4), out_noise / (NC_N / 4));
+    printf("   -> the filter models the noise path; the error signal\n");
+    printf("      is the cleaned output (headphones, sensors).\n");
+    dsp_nlms_free(&nc);
 }
 
 /* ---- Interleaving ---------------------------------------------------- */
@@ -830,7 +916,7 @@ int main(void) {
     demo_correction();
     demo_ldpc();
     demo_interleaving();
-    demo_equalization();
+    demo_adaptive();
     demo_ofdm();
     demo_coded_ofdm();
     demo_sync();

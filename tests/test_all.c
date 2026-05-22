@@ -500,33 +500,142 @@ static void test_conv_encoded_length(void) {
           "rate-1/2 code with 2 tail bits -> length 2(n+2)");
 }
 
-/* ---- coding: channel equalization ----------------------------------- */
+/* ---- adaptive filters: LMS, NLMS, RLS ------------------------------- */
+
+/* Build a system-identification problem: random input x, and
+ * desired output d = x convolved with a fixed unknown FIR `sys`. */
+static void adaptive_make_sysid(double *x, double *d, size_t n,
+                                const double *sys, size_t L,
+                                unsigned seed) {
+    for (size_t i = 0; i < n; ++i) {
+        seed = seed * 1103515245u + 12345u;
+        x[i] = ((double)((seed >> 16) & 0xFFFF) / 65535.0) * 2.0 - 1.0;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        double a = 0.0;
+        for (size_t k = 0; k < L; ++k)
+            if (i >= k) a += sys[k] * x[i - k];
+        d[i] = a;
+    }
+}
 
 static void test_lms_converges(void) {
-    printf("[coding] LMS equalizer reduces error as it converges\n");
-    enum { N = 600 };
-    double tx[N], rx[N];
-    unsigned seed = 999;
-    for (int i = 0; i < N; ++i) {
+    printf("[adaptive] LMS reduces error as it converges\n");
+    enum { N = 800, L = 6 };
+    double sys[L] = { 0.7, -0.4, 0.3, 0.2, -0.1, 0.05 };
+    double x[N], d[N];
+    adaptive_make_sysid(x, d, N, sys, L, 999);
+
+    dsp_lms f;
+    int rc = dsp_lms_init(&f, L, 0.05);
+    CHECK(rc == 0, "LMS filter initialises");
+
+    double early = dsp_lms_train(&f, x, d, 100);
+    dsp_lms_train(&f, x + 100, d + 100, 600);
+    double late  = dsp_lms_train(&f, x + 700, d + 700, 100);
+    CHECK(late < early, "LMS mean-squared error decreases over time");
+    dsp_lms_free(&f);
+}
+
+static void test_nlms_converges(void) {
+    printf("[adaptive] NLMS converges and is power-normalised\n");
+    enum { N = 800, L = 6 };
+    double sys[L] = { 0.7, -0.4, 0.3, 0.2, -0.1, 0.05 };
+    double x[N], d[N];
+    adaptive_make_sysid(x, d, N, sys, L, 1234);
+
+    dsp_nlms f;
+    int rc = dsp_nlms_init(&f, L, 0.5, 1e-6);
+    CHECK(rc == 0, "NLMS filter initialises");
+
+    double early = dsp_nlms_train(&f, x, d, 100);
+    dsp_nlms_train(&f, x + 100, d + 100, 600);
+    double late  = dsp_nlms_train(&f, x + 700, d + 700, 100);
+    CHECK(late < early, "NLMS mean-squared error decreases over time");
+    dsp_nlms_free(&f);
+}
+
+static void test_rls_converges_fast(void) {
+    printf("[adaptive] RLS recovers an unknown system accurately\n");
+    enum { N = 600, L = 6 };
+    double sys[L] = { 0.7, -0.4, 0.3, 0.2, -0.1, 0.05 };
+    double x[N], d[N];
+    adaptive_make_sysid(x, d, N, sys, L, 555);
+
+    dsp_rls f;
+    int rc = dsp_rls_init(&f, L, 0.99, 100.0);
+    CHECK(rc == 0, "RLS filter initialises");
+
+    dsp_rls_train(&f, x, d, N);
+
+    /* RLS converges precisely; its taps should match the true system. */
+    double err = 0.0;
+    for (int k = 0; k < L; ++k)
+        err += fabs(f.weights[k] - sys[k]);
+    CHECK(err < 1e-3,
+          "RLS taps converge to the unknown system's coefficients");
+    dsp_rls_free(&f);
+}
+
+static void test_rls_beats_lms_early(void) {
+    printf("[adaptive] RLS converges faster than LMS\n");
+    enum { N = 400, L = 6 };
+    double sys[L] = { 0.7, -0.4, 0.3, 0.2, -0.1, 0.05 };
+    double x[N], d[N];
+    adaptive_make_sysid(x, d, N, sys, L, 4242);
+
+    /* Compare the error over the first 40 samples - the convergence
+     * phase, where RLS's faster start should show clearly. */
+    dsp_lms lms;
+    dsp_lms_init(&lms, L, 0.05);
+    double lms_early = dsp_lms_train(&lms, x, d, 40);
+    dsp_lms_free(&lms);
+
+    dsp_rls rls;
+    dsp_rls_init(&rls, L, 0.99, 100.0);
+    double rls_early = dsp_rls_train(&rls, x, d, 40);
+    dsp_rls_free(&rls);
+
+    CHECK(rls_early < lms_early,
+          "RLS has lower early-stage error than LMS");
+}
+
+static void test_adaptive_noise_cancellation(void) {
+    printf("[adaptive] adaptive filter cancels correlated noise\n");
+    enum { N = 4000 };
+    double clean[N], ref[N], primary[N];
+    unsigned seed = 8080;
+    for (int n = 0; n < N; ++n) {
+        clean[n] = 0.3 * sin(2.0 * M_PI * 0.01 * n);   /* buried signal */
         seed = seed * 1103515245u + 12345u;
-        tx[i] = ((seed >> 16) & 1) ? 1.0 : -1.0;
+        ref[n] = ((double)((seed >> 16) & 0xFFFF) / 65535.0) * 2.0 - 1.0;
     }
-    /* 2-tap multipath channel. */
-    rx[0] = tx[0];
-    for (int i = 1; i < N; ++i)
-        rx[i] = tx[i] + 0.5 * tx[i - 1];
+    /* Primary = clean signal + a filtered version of the reference,
+     * with the noise dominating - the realistic ANC scenario. */
+    for (int n = 0; n < N; ++n) {
+        double leaked = 0.7 * ref[n]
+                      + 0.3 * (n > 0 ? ref[n - 1] : 0.0);
+        primary[n] = clean[n] + leaked;
+    }
 
-    dsp_lms eq;
-    int rc = dsp_lms_init(&eq, 11, 0.02);
-    CHECK(rc == 0, "LMS equalizer initialises");
-
-    double mse_early = dsp_lms_train(&eq, rx, tx, 100);
-    dsp_lms_train(&eq, rx + 100, tx + 100, 400);
-    double mse_late = dsp_lms_train(&eq, rx + 500, tx + 500, 100);
-
-    CHECK(mse_late < mse_early,
-          "mean-squared error decreases as the taps adapt");
-    dsp_lms_free(&eq);
+    /* The error signal of the adaptive filter is the recovered clean
+     * signal: it learns the noise path and subtracts it. */
+    dsp_nlms f;
+    dsp_nlms_init(&f, 4, 0.2, 1e-6);
+    double in_noise = 0.0, out_noise = 0.0;
+    for (int n = 0; n < N; ++n) {
+        double err;
+        dsp_nlms_update(&f, ref[n], primary[n], &err);
+        if (n >= 3 * N / 4) {             /* measure the settled tail */
+            double before = primary[n] - clean[n];
+            double after  = err        - clean[n];
+            in_noise  += before * before;
+            out_noise += after  * after;
+        }
+    }
+    CHECK(out_noise < 0.1 * in_noise,
+          "residual noise is cut to under 10% of the input noise");
+    dsp_nlms_free(&f);
 }
 
 /* ---- coding: interleaving -------------------------------------------- */
@@ -1461,6 +1570,10 @@ int main(void) {
     test_dwt2d_rejects_odd();
 
     test_lms_converges();
+    test_nlms_converges();
+    test_rls_converges_fast();
+    test_rls_beats_lms_early();
+    test_adaptive_noise_cancellation();
 
     printf("\n============================\n");
     printf("Tests run: %d   Passed: %d   Failed: %d\n",

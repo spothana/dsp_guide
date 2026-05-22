@@ -19,7 +19,8 @@ dsp_guide/
 │   ├── spectral/               <- window functions
 │   ├── sampling/               <- decimation, interpolation, resampling
 │   ├── wavelet/                <- discrete wavelet transform
-│   ├── coding/                 <- error detection, FEC, equalization
+│   ├── coding/                 <- error detection, FEC, interleaving
+│   ├── adaptive/               <- LMS, NLMS, RLS adaptive filters
 │   ├── modulation/             <- QAM, OFDM, channel, coded OFDM,
 │   │                              pulse shaping, carrier/timing sync
 │   └── image/                  <- image type, 2-D FFT/DCT, spatial
@@ -27,7 +28,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 99 unit tests
+│   └── test_all.c              <- 105 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -61,7 +62,8 @@ dependencies.
 | **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows |
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
-| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving; LMS equalizer |
+| **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving |
+| **Adaptive filters** | LMS, NLMS, and RLS, for channel equalization, system identification, and noise cancellation |
 | **Modulation** | QPSK / 16-QAM / 64-QAM with soft demapping; multipath + AWGN channel; OFDM (IFFT/CP/FFT, per-subcarrier equalization); coded OFDM; RRC pulse shaping; carrier & timing recovery |
 | **Image processing** | grayscale image type with PGM I/O; 2-D FFT and DCT (incl. 8x8 JPEG block); Gaussian/box/sharpen/Sobel/Laplacian/median filters; histogram equalization; Otsu thresholding; 2-D Haar wavelet |
 
@@ -99,8 +101,11 @@ dependencies.
   scatter burst errors so the FEC stage sees only correctable counts.
   The demo shows a 6-symbol burst that destroys one Reed-Solomon
   codeword without interleaving but is fully survivable with it.
-- **Channel equalization** is an LMS adaptive FIR filter, the DSP front-
-  end stage that cleans channel distortion before the decoder runs.
+- **Adaptive filters** provides three algorithms on a convergence-vs-
+  cost spectrum: LMS (O(L), simple), NLMS (O(L), power-normalised step,
+  easy to tune), and RLS (O(L^2), fast convergence via a recursive
+  least-squares update). The demo exercises all three on channel
+  equalization, system identification, and noise cancellation.
 - **Modulation** provides Gray-coded QAM (QPSK/16/64) with hard and soft
   demapping, a multipath + AWGN channel model, and OFDM built directly
   on the FFT (IFFT modulator, cyclic prefix, per-subcarrier equalizer).
@@ -120,7 +125,7 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-99 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+105 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -137,6 +142,7 @@ and the soft-beats-hard decoder ranking, LMS equalizer convergence,
 QAM round-trips and unit-energy normalization, the multipath/AWGN
 channel, OFDM round-trips and per-subcarrier equalization, the
 end-to-end coded-OFDM chain, RRC energy/symmetry and carrier-PLL
-locking, and the image module - 2-D FFT/DCT/wavelet round-trips, 8x8
+locking, LMS/NLMS/RLS convergence and adaptive noise cancellation,
+and the image module - 2-D FFT/DCT/wavelet round-trips, 8x8
 DCT compaction, spatial filters, the median filter, histograms, and
 Otsu thresholding.

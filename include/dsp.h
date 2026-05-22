@@ -14,10 +14,11 @@
  *   spectral/    - window functions       (leakage reduction)
  *   sampling/    - decimation, interpolation, rational resampling
  *   wavelet/     - discrete wavelet transform (multi-resolution)
- *   coding/      - error detection (CRC, parity, checksum), forward
- *                  error correction (Hamming, Reed-Solomon,
- *                  convolutional/Viterbi, LDPC), interleaving, and
- *                  channel equalization
+ *   coding/      - error detection (CRC, parity, checksum) and
+ *                  forward error correction (Hamming, Reed-Solomon,
+ *                  convolutional/Viterbi, LDPC), with interleaving
+ *   adaptive/    - adaptive filters (LMS, NLMS, RLS) for equalization,
+ *                  system identification, and noise cancellation
  *   modulation/  - QAM, OFDM, channel model, the coded-OFDM
  *                  transceiver, pulse shaping, and carrier/timing
  *                  recovery
@@ -52,7 +53,8 @@
 #include "coding/correct.h"
 #include "coding/ldpc.h"
 #include "coding/interleave.h"
-#include "coding/equalize.h"
+
+#include "adaptive/adaptive.h"
 
 #include "modulation/qam.h"
 #include "modulation/channel.h"

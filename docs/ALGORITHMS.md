@@ -201,6 +201,37 @@ waveform — equalizing channel distortion, recovering carrier and timing
 decision decoding closes the loop by passing the demodulator's
 confidence straight into the decoder instead of discarding it.
 
+## Adaptive filters
+
+A fixed filter has constant coefficients; an adaptive filter adjusts
+them sample by sample to minimise the error between its output and a
+desired reference. One filter then copes with an unknown or changing
+system.
+
+| Algorithm | Cost/sample | Convergence | Step tuning |
+|---|---|---|---|
+| LMS | O(L) | Slow | Hard — sensitive to mu and input power |
+| NLMS | O(L) | Medium | Easy — step normalised by input power |
+| RLS | O(L²) | Fast | Forgetting factor lambda |
+
+All three share the skeleton: input `x(n)`, desired `d(n)`, error
+`e(n) = d(n) − y(n)`, and a rule that nudges the weights to shrink
+`e(n)`. They differ only in that rule. **LMS** takes a stochastic-
+gradient step `w += mu·e·x` — cheap and robust but slow, and its
+effective rate drifts with the input level. **NLMS** divides the step
+by the input power `‖x‖²`, which removes that sensitivity and makes
+`mu` easy to pick; it is the usual choice for echo and noise
+cancellation. **RLS** recursively solves the full least-squares problem
+over all past samples (exponentially weighted by the forgetting factor
+`lambda`), maintaining an inverse-correlation matrix. It converges far
+faster and tracks change better, at `O(L²)` cost — the same
+fast-but-expensive trade-off seen in FIR-vs-IIR and direct-vs-FFT.
+
+Adaptive filters power equalization (invert an unknown channel), system
+identification (learn an unknown impulse response), noise and echo
+cancellation (subtract noise correlated with a reference), prediction,
+and beamforming.
+
 ## Modulation — QAM and OFDM
 
 How bits become a transmitted waveform, and how a receiver gets them
