@@ -20,11 +20,14 @@ dsp_guide/
 │   ├── sampling/               <- decimation, interpolation, resampling
 │   ├── wavelet/                <- discrete wavelet transform
 │   ├── coding/                 <- error detection, FEC, equalization
-│   └── modulation/             <- QAM, OFDM, channel, coded OFDM
+│   ├── modulation/             <- QAM, OFDM, channel, coded OFDM,
+│   │                              pulse shaping, carrier/timing sync
+│   └── image/                  <- image type, 2-D FFT/DCT, spatial
+│                                  filters, point ops, 2-D wavelet
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 79 unit tests
+│   └── test_all.c              <- 99 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -59,7 +62,8 @@ dependencies.
 | **Sample rate conversion** | Decimation, interpolation, rational resampling |
 | **Multi-resolution analysis** | Discrete wavelet transform (Haar, Mallat pyramid) |
 | **Error control coding** | CRC-32, parity, checksum; Hamming(7,4), Reed-Solomon, convolutional + Viterbi, LDPC; block & convolutional interleaving; LMS equalizer |
-| **Modulation** | QPSK / 16-QAM / 64-QAM with soft demapping; multipath + AWGN channel; OFDM (IFFT/CP/FFT, per-subcarrier equalization); end-to-end coded OFDM |
+| **Modulation** | QPSK / 16-QAM / 64-QAM with soft demapping; multipath + AWGN channel; OFDM (IFFT/CP/FFT, per-subcarrier equalization); coded OFDM; RRC pulse shaping; carrier & timing recovery |
+| **Image processing** | grayscale image type with PGM I/O; 2-D FFT and DCT (incl. 8x8 JPEG block); Gaussian/box/sharpen/Sobel/Laplacian/median filters; histogram equalization; Otsu thresholding; 2-D Haar wavelet |
 
 ## Design notes
 
@@ -102,12 +106,21 @@ dependencies.
   on the FFT (IFFT modulator, cyclic prefix, per-subcarrier equalizer).
   The coded-OFDM transceiver wires the FFT, QAM, channel, and LDPC
   modules into one end-to-end chain and measures raw vs coded BER.
+  Pulse shaping uses a unit-energy root-raised-cosine FIR; carrier
+  recovery is a decision-directed PLL and timing recovery a Gardner
+  detector with an interpolating resampler.
+- **Image processing** is the guide's 2-D module: a grayscale image
+  type with PGM I/O, separable 2-D FFT and DCT (including the 8x8 JPEG
+  block transform), spatial filters (Gaussian, box, sharpen, Sobel,
+  Laplacian, and the non-linear median filter), point operators
+  (histogram equalization, fixed and Otsu thresholding), and a 2-D
+  Haar wavelet - the JPEG 2000 transform.
 
 See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-79 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+99 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
@@ -122,5 +135,8 @@ construction and syndrome checks, LDPC bit-flipping,
 sum-product and min-sum decoding, the BER-sweep noise monotonicity
 and the soft-beats-hard decoder ranking, LMS equalizer convergence,
 QAM round-trips and unit-energy normalization, the multipath/AWGN
-channel, OFDM round-trips and per-subcarrier equalization, and the
-end-to-end coded-OFDM chain.
+channel, OFDM round-trips and per-subcarrier equalization, the
+end-to-end coded-OFDM chain, RRC energy/symmetry and carrier-PLL
+locking, and the image module - 2-D FFT/DCT/wavelet round-trips, 8x8
+DCT compaction, spatial filters, the median filter, histograms, and
+Otsu thresholding.

@@ -651,6 +651,171 @@ static void demo_coded_ofdm(void) {
     dsp_ldpc_free(&code);
 }
 
+/* ---- Pulse shaping and synchronization -------------------------------- */
+
+static void demo_sync(void) {
+    section("PULSE SHAPING & SYNCHRONIZATION");
+
+    /* Root-raised-cosine pulse shaping. */
+    enum { NSYM = 32, SPS = 8, NTAPS = 65 };
+    double rrc[NTAPS];
+    dsp_rrc_design(rrc, NTAPS, SPS, 0.25);
+    double energy = 0.0;
+    for (int i = 0; i < NTAPS; ++i) energy += rrc[i] * rrc[i];
+    printf("Root-raised-cosine filter: %d taps, %d samples/symbol, "
+           "roll-off 0.25\n", NTAPS, SPS);
+    printf("  tap energy = %.4f (normalised to 1)\n", energy);
+    printf("  shapes each symbol into a bandlimited, ISI-free pulse.\n");
+
+    /* Shape a QPSK symbol stream, then matched-filter it back. */
+    cplx syms[NSYM], shaped[NSYM * SPS], matched[NSYM * SPS];
+    unsigned s = 31;
+    for (int k = 0; k < NSYM; ++k) {
+        s = s * 1103515245u + 12345u;
+        syms[k] = dsp_cplx(((s >> 16) & 1) ? 0.707 : -0.707,
+                           ((s >> 17) & 1) ? 0.707 : -0.707);
+    }
+    dsp_pulse_shape(syms, NSYM, SPS, rrc, NTAPS, shaped);
+    dsp_matched_filter(shaped, NSYM * SPS, rrc, NTAPS, matched);
+    printf("  %d symbols -> %d shaped samples -> matched filtered\n",
+           NSYM, NSYM * SPS);
+
+    /* Carrier recovery: lock out a fixed phase offset. */
+    cplx rotated[200], recovered[200];
+    for (int i = 0; i < 200; ++i) {
+        cplx sym = dsp_cplx((i & 1) ? 0.707 : -0.707,
+                            (i & 2) ? 0.707 : -0.707);
+        rotated[i] = sym * cexp(0.4 * I);    /* 0.4 rad carrier offset */
+    }
+    dsp_carrier_pll pll;
+    dsp_carrier_pll_init(&pll, 0.05, 0.0025);
+    dsp_carrier_recover(&pll, rotated, recovered, 200);
+
+    double err_start = 0.0, err_end = 0.0;
+    for (int i = 0; i < 20; ++i) {
+        cplx sym = dsp_cplx((i & 1) ? 0.707 : -0.707,
+                            (i & 2) ? 0.707 : -0.707);
+        err_start += cabs(recovered[i] - sym);
+    }
+    for (int i = 180; i < 200; ++i) {
+        cplx sym = dsp_cplx((i & 1) ? 0.707 : -0.707,
+                            (i & 2) ? 0.707 : -0.707);
+        err_end += cabs(recovered[i] - sym);
+    }
+    printf("\nCarrier-recovery PLL locking out a 0.4 rad offset:\n");
+    printf("  constellation error, first 20 symbols : %.3f\n",
+           err_start / 20.0);
+    printf("  constellation error, last 20 symbols  : %.3f\n",
+           err_end / 20.0);
+    printf("-> the loop tracks the offset and pulls the error to ~0;\n");
+    printf("   timing recovery (Gardner detector) locks the sampling\n");
+    printf("   instant the same way, with a feedback loop.\n");
+}
+
+/* ---- Image processing ------------------------------------------------- */
+
+static void demo_image(void) {
+    section("IMAGE PROCESSING (2-D DSP)");
+
+    /* Build a synthetic test image: a smooth gradient with a bright
+     * square, so the filters and transforms have structure to act on. */
+    enum { W = 64, H = 64 };
+    dsp_image img;
+    dsp_image_alloc(&img, W, H);
+    for (size_t y = 0; y < H; ++y)
+        for (size_t x = 0; x < W; ++x) {
+            double v = 40.0 + 120.0 * ((double)x / W);
+            if (x > 20 && x < 44 && y > 20 && y < 44)
+                v = 220.0;                   /* a bright square */
+            img.data[y * W + x] = v;
+        }
+    printf("Synthetic %dx%d test image: gradient + a bright square.\n",
+           W, H);
+
+    /* 2-D FFT round-trip. */
+    double *re = malloc(W * H * sizeof(double));
+    double *im = malloc(W * H * sizeof(double));
+    dsp_image recon;
+    dsp_image_alloc(&recon, W, H);
+    dsp_fft2d(&img, re, im);
+    dsp_ifft2d(re, im, &recon);
+    double fft_err = 0.0;
+    for (size_t i = 0; i < W * H; ++i) {
+        double d = fabs(img.data[i] - recon.data[i]);
+        if (d > fft_err) fft_err = d;
+    }
+    printf("\n2-D FFT (separable: 1-D FFT on rows, then columns):\n");
+    printf("  round-trip max error: %.2e\n", fft_err);
+
+    /* 2-D DCT energy compaction. */
+    double *coeffs = malloc(W * H * sizeof(double));
+    dsp_dct2d(&img, coeffs);
+    double total = 0.0, corner = 0.0;
+    for (size_t y = 0; y < H; ++y)
+        for (size_t x = 0; x < W; ++x) {
+            double e = coeffs[y * W + x] * coeffs[y * W + x];
+            total += e;
+            if (x < 8 && y < 8) corner += e;     /* low-frequency 8x8 */
+        }
+    printf("\n2-D DCT (the JPEG transform):\n");
+    printf("  energy in the low-frequency 8x8 corner: %.2f%%\n",
+           100.0 * corner / total);
+    printf("  -> compaction into few coefficients is why JPEG works.\n");
+
+    /* Spatial filters. */
+    dsp_image blurred, edges;
+    dsp_image_alloc(&blurred, W, H);
+    dsp_image_alloc(&edges, W, H);
+    dsp_gaussian_blur(&img, &blurred, 1.5);
+    dsp_sobel(&img, &edges);
+
+    /* The square's border should light up under Sobel. */
+    double edge_on  = edges.data[32 * W + 20];   /* on the square edge */
+    double edge_off = edges.data[10 * W + 10];   /* smooth gradient    */
+    printf("\nSpatial filters (2-D convolution):\n");
+    printf("  Gaussian blur: smooths detail (unit-gain kernel)\n");
+    printf("  Sobel edge magnitude at the square's border: %.0f\n",
+           edge_on);
+    printf("  Sobel response in the smooth gradient      : %.1f\n",
+           edge_off);
+
+    /* Median filter removes salt noise a blur cannot. */
+    dsp_image noisy, cleaned;
+    dsp_image_copy(&noisy, &img);
+    noisy.data[30 * W + 30] = 255.0;             /* an impulse */
+    noisy.data[40 * W + 15] = 0.0;
+    dsp_image_alloc(&cleaned, W, H);
+    dsp_median_filter(&noisy, &cleaned, 3);
+    printf("\nMedian filter (non-linear): erases salt-and-pepper\n");
+    printf("  spike pixel was 255, after median: %.0f\n",
+           cleaned.data[30 * W + 30]);
+
+    /* Otsu automatic thresholding. */
+    double t = dsp_threshold_otsu(&img);
+    printf("\nOtsu automatic threshold: %.0f (no manual tuning)\n", t);
+
+    /* 2-D wavelet: split into four resolution quadrants. */
+    dsp_image wav;
+    dsp_image_copy(&wav, &img);
+    dsp_dwt2d_haar(&wav);
+    dsp_idwt2d_haar(&wav);
+    double wav_err = 0.0;
+    for (size_t i = 0; i < W * H; ++i) {
+        double d = fabs(img.data[i] - wav.data[i]);
+        if (d > wav_err) wav_err = d;
+    }
+    printf("\n2-D Haar wavelet (the JPEG 2000 transform):\n");
+    printf("  splits the image into approximation + 3 detail "
+           "quadrants\n");
+    printf("  round-trip max error: %.2e\n", wav_err);
+
+    free(re); free(im); free(coeffs);
+    dsp_image_free(&img);   dsp_image_free(&recon);
+    dsp_image_free(&blurred); dsp_image_free(&edges);
+    dsp_image_free(&noisy); dsp_image_free(&cleaned);
+    dsp_image_free(&wav);
+}
+
 int main(void) {
     printf("DSP GUIDE - annotated demo\n");
     printf("C implementation of common digital signal processing algorithms.\n");
@@ -668,6 +833,8 @@ int main(void) {
     demo_equalization();
     demo_ofdm();
     demo_coded_ofdm();
+    demo_sync();
+    demo_image();
 
     printf("\nAll demos complete.\n");
     return 0;

@@ -260,3 +260,77 @@ feeds per-bit LLRs (scaled by the channel's noise level) into the LDPC
 decoder — the soft-information handoff that makes coded OFDM perform
 close to channel capacity. This FEC + OFDM pairing is the data-carrying
 core of every modern broadband wireless standard.
+
+## Communications front end — pulse shaping & synchronization
+
+The receiver-side analog refinements that sit before the demapper.
+
+| Function | Algorithm | Role |
+|---|---|---|
+| Pulse shaping | Root-raised-cosine FIR | Bandlimits symbols, ISI-free at sample instants |
+| Carrier recovery | Decision-directed PLL | Cancels frequency/phase offset that spins the constellation |
+| Timing recovery | Gardner detector + interpolator | Locks the sampling instant to the symbol centre |
+
+A symbol stream cannot be sent as bare impulses — sharp edges need
+infinite bandwidth. The **root-raised-cosine** pulse is bandlimited yet
+zero at every symbol instant but its own, so neighbours do not interfere
+(the Nyquist ISI-free property). Splitting the raised cosine into a
+transmit RRC and a receive RRC also makes the receive filter the matched
+filter that maximises SNR. The roll-off factor trades bandwidth against
+pulse-tail decay.
+
+**Carrier** and **timing recovery** are feedback loops — the same
+measure-error-and-nudge structure as the LMS equalizer. The carrier PLL
+is decision-directed: it slices each sample to the nearest constellation
+point and uses the angle between them as the phase error, with a
+second-order loop filter that also tracks a constant frequency offset.
+The Gardner timing detector uses the mid-symbol sample to estimate the
+fractional timing offset, which an interpolating resampler then corrects.
+Loop gain sets the speed/stability trade-off: small gain tracks smoothly,
+large gain locks fast but jitters.
+
+## Image processing — 2-D DSP
+
+Every transform and filter here is **2-D**, and almost all are
+*separable*: a 1-D operation applied to rows, then to columns. The 1-D
+machinery from earlier modules does the real work.
+
+### 2-D transforms
+
+| Transform | Built from | Use |
+|---|---|---|
+| 2-D FFT | 1-D FFT on rows + columns | Spatial-frequency analysis, fast 2-D convolution |
+| 2-D DCT | 1-D DCT on rows + columns | The JPEG transform — energy compaction for compression |
+| 2-D Haar wavelet | 1-D Haar on rows + columns | The JPEG 2000 transform — multi-resolution analysis |
+
+The 8x8 block DCT is the exact transform JPEG applies to each pixel
+block; its energy compaction packs most of a block into a few
+low-frequency coefficients. The 2-D wavelet instead splits an image into
+four quadrants — a half-size approximation plus horizontal, vertical, and
+diagonal detail — which is why JPEG 2000 uses it: the multi-resolution
+structure scales and compresses better than fixed blocks.
+
+### Spatial filtering
+
+| Filter | Kind | Effect |
+|---|---|---|
+| Gaussian / box blur | Linear convolution | Smooths noise and detail |
+| Sharpen | Linear convolution | Boosts local contrast |
+| Sobel | Linear convolution | Gradient edge detector |
+| Laplacian | Linear convolution | Orientation-free edge/detail operator |
+| Median | Non-linear | Removes salt-and-pepper noise, keeps edges |
+
+Blurring, sharpening, and edge detection are all **2-D convolution** —
+slide a small kernel, take a weighted neighbourhood sum — the image-
+domain counterpart of 1-D filtering. The **median filter** is the
+exception: it replaces each pixel with its neighbourhood median, cannot
+be written as a kernel, and removes impulse noise that a linear blur only
+smears around.
+
+### Point operators
+
+Histogram equalization remaps pixels through the cumulative histogram so
+the output uses the full tonal range — a contrast fix that depends only
+on each pixel's own value. Otsu's method picks the threshold that best
+splits the histogram into two classes by maximising the between-class
+variance, binarizing an image with no manual tuning.

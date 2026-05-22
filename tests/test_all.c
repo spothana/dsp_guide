@@ -1085,6 +1085,286 @@ static void test_coded_ofdm_corrects_errors(void) {
     dsp_ldpc_free(&code);
 }
 
+/* ---- modulation: pulse shaping & sync -------------------------------- */
+
+static void test_rrc_energy_and_symmetry(void) {
+    printf("[modulation] RRC filter is unit-energy and symmetric\n");
+    enum { NT = 65 };
+    double taps[NT];
+    dsp_rrc_design(taps, NT, 8, 0.25);
+
+    double energy = 0.0;
+    for (int i = 0; i < NT; ++i) energy += taps[i] * taps[i];
+    CHECK(close(energy, 1.0, 1e-9), "RRC tap energy normalised to 1");
+
+    int sym = 1;
+    for (int i = 0; i < NT; ++i)
+        if (!close(taps[i], taps[NT - 1 - i], 1e-9)) sym = 0;
+    CHECK(sym, "RRC taps are symmetric (linear phase)");
+}
+
+static void test_pulse_shape_length(void) {
+    printf("[modulation] pulse shaping expands by samples-per-symbol\n");
+    enum { NSYM = 20, SPS = 4, NT = 33 };
+    cplx syms[NSYM], out[NSYM * SPS];
+    double taps[NT];
+    dsp_rrc_design(taps, NT, SPS, 0.3);
+    for (int i = 0; i < NSYM; ++i) syms[i] = dsp_cplx(1.0, -1.0);
+    size_t n = dsp_pulse_shape(syms, NSYM, SPS, taps, NT, out);
+    CHECK(n == dsp_pulse_shaped_len(NSYM, SPS),
+          "shaped length == nsym * sps");
+}
+
+static void test_carrier_pll_locks(void) {
+    printf("[modulation] carrier PLL locks out a phase offset\n");
+    cplx in[300], out[300];
+    for (int i = 0; i < 300; ++i) {
+        cplx sym = dsp_cplx((i & 1) ? 0.707 : -0.707,
+                            (i & 2) ? 0.707 : -0.707);
+        in[i] = sym * cexp(0.35 * I);        /* fixed 0.35 rad offset */
+    }
+    dsp_carrier_pll pll;
+    dsp_carrier_pll_init(&pll, 0.05, 0.0025);
+    dsp_carrier_recover(&pll, in, out, 300);
+
+    /* After locking, the last symbols should match the un-rotated
+     * constellation closely. */
+    double err = 0.0;
+    for (int i = 280; i < 300; ++i) {
+        cplx sym = dsp_cplx((i & 1) ? 0.707 : -0.707,
+                            (i & 2) ? 0.707 : -0.707);
+        err += cabs(out[i] - sym);
+    }
+    CHECK(err / 20.0 < 0.05,
+          "constellation error is near zero after the loop locks");
+}
+
+static void test_timing_resample_length(void) {
+    printf("[modulation] timing resampler decimates to symbol rate\n");
+    enum { N = 128, SPS = 4 };
+    cplx samples[N], syms[N / SPS];
+    for (int i = 0; i < N; ++i) samples[i] = dsp_cplx((double)i, 0.0);
+    size_t ns = dsp_timing_resample(samples, N, SPS, 0.0, syms);
+    CHECK(ns == N / SPS, "one output symbol per sps input samples");
+}
+
+/* ---- image: container ----------------------------------------------- */
+
+static void test_image_alloc_and_access(void) {
+    printf("[image] image allocation and clamped pixel access\n");
+    dsp_image img;
+    int rc = dsp_image_alloc(&img, 8, 6);
+    CHECK(rc == 0 && img.width == 8 && img.height == 6,
+          "image allocates with the requested dimensions");
+
+    img.data[2 * 8 + 3] = 42.0;
+    CHECK(close(dsp_image_at(&img, 3, 2), 42.0, 1e-12),
+          "pixel read-back is correct");
+    /* Out-of-range coordinates clamp to the edge, not crash. */
+    CHECK(close(dsp_image_at(&img, -5, -5), img.data[0], 1e-12),
+          "negative coordinates clamp to the corner pixel");
+
+    dsp_image_free(&img);
+}
+
+/* ---- image: 2-D transforms ------------------------------------------ */
+
+static void test_fft2d_roundtrip(void) {
+    printf("[image] 2-D FFT round-trips back to the original image\n");
+    dsp_image img;
+    dsp_image_alloc(&img, 16, 16);
+    for (size_t i = 0; i < 256; ++i)
+        img.data[i] = (double)((i * 13 + 7) % 200);
+
+    double re[256], im[256];
+    dsp_image back;
+    dsp_image_alloc(&back, 16, 16);
+    int rc1 = dsp_fft2d(&img, re, im);
+    int rc2 = dsp_ifft2d(re, im, &back);
+
+    int ok = (rc1 == 0 && rc2 == 0);
+    for (size_t i = 0; i < 256; ++i)
+        if (!close(img.data[i], back.data[i], 1e-6)) ok = 0;
+    CHECK(ok, "ifft2d(fft2d(image)) == image");
+
+    dsp_image_free(&img);
+    dsp_image_free(&back);
+}
+
+static void test_fft2d_rejects_non_pow2(void) {
+    printf("[image] 2-D FFT rejects non-power-of-two dimensions\n");
+    dsp_image img;
+    dsp_image_alloc(&img, 20, 16);
+    double re[320], im[320];
+    CHECK(dsp_fft2d(&img, re, im) == -1,
+          "a width of 20 is rejected");
+    dsp_image_free(&img);
+}
+
+static void test_dct2d_roundtrip(void) {
+    printf("[image] 2-D DCT round-trips back to the original image\n");
+    dsp_image img;
+    dsp_image_alloc(&img, 24, 24);
+    for (size_t i = 0; i < 576; ++i)
+        img.data[i] = (double)((i * 5 + 11) % 256);
+
+    double coeffs[576];
+    dsp_image back;
+    dsp_image_alloc(&back, 24, 24);
+    dsp_dct2d(&img, coeffs);
+    dsp_idct2d(coeffs, &back);
+
+    int ok = 1;
+    for (size_t i = 0; i < 576; ++i)
+        if (!close(img.data[i], back.data[i], 1e-6)) ok = 0;
+    CHECK(ok, "idct2d(dct2d(image)) == image");
+
+    dsp_image_free(&img);
+    dsp_image_free(&back);
+}
+
+static void test_dct8x8_compaction(void) {
+    printf("[image] 8x8 DCT compacts a smooth block's energy\n");
+    /* A smooth gradient block - energy should pile into the corner. */
+    double block[64], coeffs[64];
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+            block[y * 8 + x] = (double)(x + y) * 10.0;
+    dsp_dct8x8(block, coeffs);
+
+    double total = 0.0, low = 0.0;
+    for (int i = 0; i < 64; ++i) {
+        double e = coeffs[i] * coeffs[i];
+        total += e;
+        if ((i / 8) < 3 && (i % 8) < 3) low += e;
+    }
+    CHECK(low / total > 0.98,
+          "the low-frequency 3x3 corner holds >98% of the energy");
+}
+
+/* ---- image: spatial filters ----------------------------------------- */
+
+static void test_gaussian_preserves_flat(void) {
+    printf("[image] Gaussian blur preserves a flat region\n");
+    dsp_image img, out;
+    dsp_image_alloc(&img, 32, 32);
+    dsp_image_alloc(&out, 32, 32);
+    for (size_t i = 0; i < 1024; ++i) img.data[i] = 90.0;
+    dsp_gaussian_blur(&img, &out, 1.5);
+
+    int ok = 1;
+    for (size_t i = 0; i < 1024; ++i)
+        if (!close(out.data[i], 90.0, 1e-6)) ok = 0;
+    CHECK(ok, "blurring a constant image leaves it unchanged");
+
+    dsp_image_free(&img);
+    dsp_image_free(&out);
+}
+
+static void test_sobel_finds_edges(void) {
+    printf("[image] Sobel responds to an edge, not to flat regions\n");
+    dsp_image img, out;
+    dsp_image_alloc(&img, 32, 32);
+    dsp_image_alloc(&out, 32, 32);
+    /* A vertical step edge down the middle. */
+    for (size_t y = 0; y < 32; ++y)
+        for (size_t x = 0; x < 32; ++x)
+            img.data[y * 32 + x] = (x < 16) ? 0.0 : 255.0;
+    dsp_sobel(&img, &out);
+
+    double on_edge  = out.data[16 * 32 + 15];
+    double off_edge = out.data[16 * 32 + 4];
+    CHECK(on_edge > 100.0 && off_edge < 1.0,
+          "strong response at the edge, near zero in flat areas");
+
+    dsp_image_free(&img);
+    dsp_image_free(&out);
+}
+
+static void test_median_removes_spike(void) {
+    printf("[image] median filter removes an isolated spike\n");
+    dsp_image img, out;
+    dsp_image_alloc(&img, 16, 16);
+    dsp_image_alloc(&out, 16, 16);
+    for (size_t i = 0; i < 256; ++i) img.data[i] = 60.0;
+    img.data[8 * 16 + 8] = 255.0;            /* salt noise */
+    dsp_median_filter(&img, &out, 3);
+    CHECK(close(out.data[8 * 16 + 8], 60.0, 1e-9),
+          "the spike is replaced by the neighbourhood median");
+
+    dsp_image_free(&img);
+    dsp_image_free(&out);
+}
+
+/* ---- image: point operators & 2-D wavelet --------------------------- */
+
+static void test_histogram_total(void) {
+    printf("[image] histogram bins sum to the pixel count\n");
+    dsp_image img;
+    dsp_image_alloc(&img, 20, 15);
+    for (size_t i = 0; i < 300; ++i) img.data[i] = (double)(i % 256);
+    size_t hist[256];
+    dsp_histogram(&img, hist);
+    size_t total = 0;
+    for (int i = 0; i < 256; ++i) total += hist[i];
+    CHECK(total == 300, "histogram counts add up to width*height");
+    dsp_image_free(&img);
+}
+
+static void test_otsu_threshold_bimodal(void) {
+    printf("[image] Otsu threshold separates a bimodal image\n");
+    dsp_image img;
+    dsp_image_alloc(&img, 32, 32);
+    for (size_t i = 0; i < 1024; ++i)
+        img.data[i] = (i < 512) ? 40.0 : 210.0;
+    double t = dsp_threshold_otsu(&img);
+    CHECK(t >= 40.0 && t < 210.0,
+          "threshold falls between the two intensity modes");
+    dsp_image_free(&img);
+}
+
+static void test_threshold_binarizes(void) {
+    printf("[image] thresholding produces a pure black/white image\n");
+    dsp_image img, out;
+    dsp_image_alloc(&img, 16, 16);
+    dsp_image_alloc(&out, 16, 16);
+    for (size_t i = 0; i < 256; ++i) img.data[i] = (double)i;
+    dsp_threshold(&img, &out, 128.0);
+    int ok = 1;
+    for (size_t i = 0; i < 256; ++i)
+        if (out.data[i] != 0.0 && out.data[i] != 255.0) ok = 0;
+    CHECK(ok, "every output pixel is exactly 0 or 255");
+    dsp_image_free(&img);
+    dsp_image_free(&out);
+}
+
+static void test_dwt2d_roundtrip(void) {
+    printf("[image] 2-D Haar wavelet round-trips back to the image\n");
+    dsp_image img, work;
+    dsp_image_alloc(&img, 16, 16);
+    for (size_t i = 0; i < 256; ++i)
+        img.data[i] = (double)((i * 9 + 4) % 220);
+    dsp_image_copy(&work, &img);
+
+    int rc1 = dsp_dwt2d_haar(&work);
+    int rc2 = dsp_idwt2d_haar(&work);
+    int ok = (rc1 == 0 && rc2 == 0);
+    for (size_t i = 0; i < 256; ++i)
+        if (!close(img.data[i], work.data[i], 1e-9)) ok = 0;
+    CHECK(ok, "idwt2d(dwt2d(image)) == image");
+
+    dsp_image_free(&img);
+    dsp_image_free(&work);
+}
+
+static void test_dwt2d_rejects_odd(void) {
+    printf("[image] 2-D wavelet rejects odd dimensions\n");
+    dsp_image img;
+    dsp_image_alloc(&img, 15, 16);
+    CHECK(dsp_dwt2d_haar(&img) == -1, "an odd width is rejected");
+    dsp_image_free(&img);
+}
+
 int main(void) {
     printf("DSP GUIDE - test suite\n");
     printf("============================\n\n");
@@ -1160,6 +1440,25 @@ int main(void) {
     test_coded_ofdm_noiseless();
     test_coded_ofdm_dimension_check();
     test_coded_ofdm_corrects_errors();
+
+    test_rrc_energy_and_symmetry();
+    test_pulse_shape_length();
+    test_carrier_pll_locks();
+    test_timing_resample_length();
+
+    test_image_alloc_and_access();
+    test_fft2d_roundtrip();
+    test_fft2d_rejects_non_pow2();
+    test_dct2d_roundtrip();
+    test_dct8x8_compaction();
+    test_gaussian_preserves_flat();
+    test_sobel_finds_edges();
+    test_median_removes_spike();
+    test_histogram_total();
+    test_otsu_threshold_bimodal();
+    test_threshold_binarizes();
+    test_dwt2d_roundtrip();
+    test_dwt2d_rejects_odd();
 
     test_lms_converges();
 

@@ -18,8 +18,11 @@
  *                  error correction (Hamming, Reed-Solomon,
  *                  convolutional/Viterbi, LDPC), interleaving, and
  *                  channel equalization
- *   modulation/  - QAM, OFDM, channel model, and the end-to-end
- *                  coded-OFDM transceiver
+ *   modulation/  - QAM, OFDM, channel model, the coded-OFDM
+ *                  transceiver, pulse shaping, and carrier/timing
+ *                  recovery
+ *   image/       - grayscale image type, 2-D FFT and DCT, spatial
+ *                  filtering, point operators, and the 2-D wavelet
  *
  * Every module is annotated with: what problem it solves, its
  * computational complexity, and the trade-offs versus its alternatives.
@@ -55,5 +58,9 @@
 #include "modulation/channel.h"
 #include "modulation/ofdm.h"
 #include "modulation/coded_ofdm.h"
+#include "modulation/pulse.h"
+#include "modulation/sync.h"
+
+#include "image/image_all.h"
 
 #endif /* DSP_H */
