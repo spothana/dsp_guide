@@ -109,6 +109,102 @@ static void test_dct_energy_compaction(void) {
           "first 4 of 32 DCT coefficients hold >99% of the energy");
 }
 
+/* ---- transforms: Hilbert transform ---------------------------------- */
+
+static void test_hilbert_cos_gives_sin(void) {
+    printf("[transforms] Hilbert transform of cosine is sine\n");
+    enum { N = 512 };
+    double x[N], h[N];
+    double w = 2.0 * M_PI * 0.05;
+    for (int n = 0; n < N; ++n)
+        x[n] = cos(w * n);
+    int rc = dsp_hilbert(x, N, h);
+    CHECK(rc == 0, "the Hilbert transform completes");
+
+    /* H{cos} = sin; check the interior, away from FFT edge wrap. */
+    double err = 0.0;
+    int cnt = 0;
+    for (int n = 64; n < N - 64; ++n) {
+        err += fabs(h[n] - sin(w * n));
+        ++cnt;
+    }
+    CHECK(cnt > 0 && err / cnt < 0.02,
+          "H{cos(wt)} matches sin(wt) in the interior");
+}
+
+static void test_hilbert_rejects_non_pow2(void) {
+    printf("[transforms] Hilbert transform rejects non-power-of-two n\n");
+    enum { N = 100 };
+    double x[N], h[N];
+    for (int i = 0; i < N; ++i) x[i] = cos(0.1 * i);
+    CHECK(dsp_hilbert(x, N, h) == -1, "a length of 100 is rejected");
+}
+
+static void test_analytic_signal_real_part(void) {
+    printf("[transforms] analytic signal keeps the input as its real part\n");
+    enum { N = 256 };
+    double x[N];
+    for (int i = 0; i < N; ++i)
+        x[i] = cos(0.2 * i) + 0.3 * sin(0.7 * i);
+    cplx z[N];
+    int rc = dsp_analytic_signal(x, N, z);
+    CHECK(rc == 0, "the analytic signal is computed");
+
+    int ok = 1;
+    for (int i = 0; i < N; ++i)
+        if (!close(creal(z[i]), x[i], 1e-9)) ok = 0;
+    CHECK(ok, "Re{z(t)} equals the original signal");
+}
+
+static void test_envelope_tracks_am(void) {
+    printf("[transforms] envelope follows an AM signal's modulation\n");
+    enum { N = 512 };
+    double am[N], env[N];
+    /* Carrier at 0.1, amplitude-modulated by 1 + 0.5*cos(slow). */
+    for (int n = 0; n < N; ++n) {
+        double mod = 1.0 + 0.5 * cos(2.0 * M_PI * 0.005 * n);
+        am[n] = mod * cos(2.0 * M_PI * 0.1 * n);
+    }
+    int rc = dsp_envelope(am, N, env);
+    CHECK(rc == 0, "the envelope is computed");
+
+    /* The recovered envelope should track the modulation curve. */
+    double err = 0.0;
+    int cnt = 0;
+    for (int n = 64; n < N - 64; ++n) {
+        double mod = 1.0 + 0.5 * cos(2.0 * M_PI * 0.005 * n);
+        err += fabs(env[n] - mod);
+        ++cnt;
+    }
+    CHECK(cnt > 0 && err / cnt < 0.02,
+          "the envelope recovers the AM modulation curve");
+}
+
+static void test_instantaneous_frequency_chirp(void) {
+    printf("[transforms] instantaneous frequency tracks a chirp\n");
+    enum { N = 512 };
+    double chirp[N], ifr[N];
+    /* A linear chirp sweeping 0.05 -> 0.20. */
+    for (int n = 0; n < N; ++n) {
+        double phase = 2.0 * M_PI
+                     * (0.05 * n + 0.15 * 0.5 * n * n / N);
+        chirp[n] = cos(phase);
+    }
+    int rc = dsp_instantaneous_frequency(chirp, N, ifr);
+    CHECK(rc == 0, "instantaneous frequency is computed");
+
+    /* The estimate should follow the linear sweep in the interior. */
+    double err = 0.0;
+    int cnt = 0;
+    for (int n = 64; n < N - 64; ++n) {
+        double expect = 0.05 + 0.15 * ((double)n / N);
+        err += fabs(ifr[n] - expect);
+        ++cnt;
+    }
+    CHECK(cnt > 0 && err / cnt < 0.01,
+          "the instantaneous frequency follows the chirp sweep");
+}
+
 /* ---- filtering ------------------------------------------------------ */
 
 static void test_fir_linear_phase(void) {
@@ -2166,6 +2262,12 @@ int main(void) {
     test_fft_rejects_non_pow2();
     test_dct_roundtrip();
     test_dct_energy_compaction();
+
+    test_hilbert_cos_gives_sin();
+    test_hilbert_rejects_non_pow2();
+    test_analytic_signal_real_part();
+    test_envelope_tracks_am();
+    test_instantaneous_frequency_chirp();
 
     test_fir_linear_phase();
     test_fir_dc_gain();

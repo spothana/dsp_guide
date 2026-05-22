@@ -8,7 +8,7 @@
  * Organisation mirrors the Fiveable "Common Digital Signal Processing
  * Algorithms" guide:
  *
- *   transforms/  - DFT, FFT, DCT          (time <-> frequency)
+ *   transforms/  - DFT, FFT, DCT, Hilbert  (time <-> frequency)
  *   filtering/   - FIR, IIR               (frequency-selective filters)
  *   operations/  - convolution, correlation
  *   spectral/    - window functions, advanced spectral estimation
@@ -41,6 +41,7 @@
 #include "transforms/dft.h"
 #include "transforms/fft.h"
 #include "transforms/dct.h"
+#include "transforms/hilbert.h"
 
 #include "filtering/fir.h"
 #include "filtering/iir.h"

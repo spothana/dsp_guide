@@ -3,6 +3,7 @@
  */
 #include "spectral/timefreq.h"
 #include "transforms/fft.h"
+#include "transforms/hilbert.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -217,25 +218,6 @@ void dsp_qmf_synthesize(const dsp_qmf_bank *bank,
  * Wigner-Ville distribution
  * =================================================================== */
 
-/* Build the analytic signal of a real input via the FFT: zero the
- * negative-frequency half and double the positive half. */
-static int analytic_signal(const double *x, size_t n, cplx *z) {
-    if (!dsp_is_pow2(n))
-        return -1;
-    for (size_t i = 0; i < n; ++i)
-        z[i] = x[i];
-    dsp_fft(z, n);
-
-    /* Keep DC and Nyquist, double bins 1..n/2-1, zero the rest. */
-    for (size_t k = 1; k < n / 2; ++k)
-        z[k] *= 2.0;
-    for (size_t k = n / 2 + 1; k < n; ++k)
-        z[k] = 0.0;
-
-    dsp_ifft(z, n);
-    return 0;
-}
-
 /* Core WVD: optional smoothing window applied along the lag axis. */
 static int wvd_core(const double *x, size_t n, double *wvd,
                     const double *lag_win) {
@@ -250,8 +232,10 @@ static int wvd_core(const double *x, size_t n, double *wvd,
     }
 
     /* Work on the analytic signal: this halves the cross terms and
-     * removes the spectral aliasing a real input would cause. */
-    if (analytic_signal(x, n, z) != 0) {
+     * removes the spectral aliasing a real input would cause. The
+     * analytic signal is the Hilbert-transform-based construction in
+     * transforms/hilbert.h. */
+    if (dsp_analytic_signal(x, n, z) != 0) {
         free(z); free(row);
         return -1;
     }
@@ -271,10 +255,15 @@ static int wvd_core(const double *x, size_t n, double *wvd,
             }
             row[tau] = r;
         }
-        /* The WVD slice at time t is the FFT of that lag sequence. */
+        /* The WVD slice at time t is the FFT of that lag sequence.
+         * With this FFT's sign convention, positive frequency sits in
+         * the upper half of the spectrum, so the bins are reversed on
+         * write to give an ascending frequency axis: WVD bin 0 is zero
+         * frequency, increasing to bin n-1. */
         dsp_fft(row, n);
-        for (size_t f = 0; f < n; ++f)
-            wvd[t * n + f] = creal(row[f]);
+        wvd[t * n + 0] = creal(row[0]);
+        for (size_t f = 1; f < n; ++f)
+            wvd[t * n + f] = creal(row[n - f]);
     }
 
     free(z);

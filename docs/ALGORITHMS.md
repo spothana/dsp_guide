@@ -10,6 +10,7 @@ when to reach for it. `N` is signal length; `M` is filter/kernel length.
 | DFT  | O(N²)      | N complex bins | Reference / teaching only — too slow for real N |
 | FFT  | O(N log N) | N complex bins | Any practical spectral analysis; identical result to DFT |
 | DCT  | O(N²) here | N real coeffs  | Compression — energy compacts into few coefficients |
+| Hilbert | O(N log N) | N real samples | Building the analytic signal — envelope, instantaneous frequency |
 
 **DFT vs FFT.** Same mathematical result. The FFT exploits symmetry
 (`W_N^{k+N/2} = -W_N^k`) and periodicity to divide and conquer. For
@@ -21,6 +22,18 @@ only cosines, stays real for real input, and handles block edges better
 (implicit symmetric extension instead of periodic wraparound). Its strong
 energy compaction is why JPEG and MPEG use it. If a question is about
 image or video compression, the answer is DCT.
+
+**Hilbert transform.** Shifts every frequency component by −90°. On its
+own that is a curiosity; its value is the **analytic signal**
+`z(t) = x(t) + j·H{x(t)}` — a complex signal with only positive
+frequencies. Two quantities fall straight out of it: the **envelope**
+`|z(t)|` (instantaneous amplitude — AM demodulation, onset detection)
+and the **instantaneous frequency**, the time derivative of `arg z(t)`
+(FM demodulation, chirp analysis). It is computed in the frequency
+domain — FFT, keep DC and Nyquist, double the positive-frequency bins,
+zero the negative ones, inverse FFT — which is exact, with no filter
+design. The Wigner-Ville distribution also uses the analytic signal to
+halve its cross terms.
 
 ## Digital filtering
 

@@ -49,6 +49,74 @@ static void demo_transforms(void) {
     printf("\n");
 }
 
+/* ---- Hilbert transform ---------------------------------------------- */
+
+static void demo_hilbert(void) {
+    section("HILBERT TRANSFORM (analytic signal)");
+
+    enum { M = 256 };
+
+    /* The Hilbert transform shifts every frequency by -90 degrees, so
+     * a cosine becomes a sine. */
+    double cosine[M], hil[M];
+    double w = 2.0 * M_PI * 0.04;
+    for (int n = 0; n < M; ++n)
+        cosine[n] = cos(w * n);
+    dsp_hilbert(cosine, M, hil);
+
+    double sin_err = 0.0;
+    int cnt = 0;
+    for (int n = 32; n < M - 32; ++n) {
+        sin_err += fabs(hil[n] - sin(w * n));
+        ++cnt;
+    }
+    printf("The Hilbert transform shifts every frequency by -90 deg,\n");
+    printf("turning a cosine into a sine:\n");
+    printf("  H{cos(wt)} vs sin(wt): mean error %.4f\n", sin_err / cnt);
+
+    /* Pairing the signal with its Hilbert transform gives the
+     * analytic signal, from which the envelope and instantaneous
+     * frequency follow directly. */
+    printf("\nThe analytic signal z(t) = x(t) + j H{x(t)} exposes two\n");
+    printf("quantities a single real signal hides:\n");
+
+    /* Envelope: an amplitude-modulated carrier. The envelope recovers
+     * the slow modulation - this is AM demodulation. */
+    double am[M], env[M];
+    for (int n = 0; n < M; ++n) {
+        double mod = 1.0 + 0.6 * cos(2.0 * M_PI * 0.008 * n);
+        am[n] = mod * cos(2.0 * M_PI * 0.12 * n);
+    }
+    dsp_envelope(am, M, env);
+    printf("\n  Envelope (instantaneous amplitude):\n");
+    printf("    an AM carrier modulated by 1 + 0.6 cos(slow)\n");
+    printf("    recovered envelope vs modulation:");
+    for (int n = 64; n < M - 32; n += 48) {
+        double mod = 1.0 + 0.6 * cos(2.0 * M_PI * 0.008 * n);
+        printf(" %.2f~%.2f", env[n], mod);
+    }
+    printf("\n    -> this is exactly AM demodulation.\n");
+
+    /* Instantaneous frequency: a chirp. The estimate tracks the
+     * sweeping frequency - this is FM demodulation. */
+    double chirp[M], ifr[M];
+    for (int n = 0; n < M; ++n) {
+        double phase = 2.0 * M_PI
+                     * (0.05 * n + 0.20 * 0.5 * n * n / M);
+        chirp[n] = cos(phase);
+    }
+    dsp_instantaneous_frequency(chirp, M, ifr);
+    printf("\n  Instantaneous frequency:\n");
+    printf("    a chirp sweeping f = 0.05 -> 0.25\n");
+    printf("    estimate vs true frequency:");
+    for (int n = 64; n < M - 32; n += 48) {
+        double expect = 0.05 + 0.20 * ((double)n / M);
+        printf(" %.3f~%.3f", ifr[n], expect);
+    }
+    printf("\n    -> this is FM demodulation; the analytic signal also\n");
+    printf("       sharpens the Wigner-Ville distribution (timefreq).\n");
+}
+
 /* ---- Digital filtering ---------------------------------------------- */
 
 static void demo_filtering(void) {
@@ -1305,6 +1373,7 @@ int main(void) {
     printf("C implementation of common digital signal processing algorithms.\n");
 
     demo_transforms();
+    demo_hilbert();
     demo_filtering();
     demo_operations();
     demo_spectral();

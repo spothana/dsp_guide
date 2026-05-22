@@ -13,7 +13,7 @@ dsp_guide/
 ├── include/
 │   ├── dsp.h                   <- single master include
 │   ├── common.h                <- complex type, math helpers
-│   ├── transforms/             <- dft, fft, dct
+│   ├── transforms/             <- dft, fft, dct, hilbert
 │   ├── filtering/              <- fir, iir
 │   ├── operations/             <- convolution, correlation
 │   ├── spectral/               <- windows, AR/ARMA/MUSIC/ESPRIT,
@@ -30,7 +30,7 @@ dsp_guide/
 ├── src/                        <- implementations mirror include/
 │   └── main.c                  <- annotated demo runner
 ├── tests/
-│   └── test_all.c              <- 154 unit tests
+│   └── test_all.c              <- 163 unit tests
 └── docs/
     └── ALGORITHMS.md           <- complexity & trade-off cheat-sheet
 ```
@@ -58,7 +58,7 @@ dependencies.
 
 | Category | Algorithms |
 |---|---|
-| **Frequency-domain transforms** | DFT, FFT (radix-2 Cooley-Tukey), DCT-II/III |
+| **Frequency-domain transforms** | DFT, FFT (radix-2 Cooley-Tukey), DCT-II/III, Hilbert transform |
 | **Digital filtering** | FIR (windowed-sinc design), IIR (biquad, RBJ design) |
 | **Signal operations** | Convolution (direct + FFT), cross/auto-correlation |
 | **Spectral analysis** | Rectangular, Hamming, Hanning, Blackman windows; advanced estimation (AR via Yule-Walker & Burg, ARMA, MUSIC, ESPRIT); time-frequency analysis (STFT/spectrogram, QMF filter bank, Wigner-Ville) |
@@ -75,6 +75,9 @@ dependencies.
 
 - **DFT** is the literal O(N²) definition — a correctness reference for
   the FFT, not for production use.
+- **Hilbert transform** is FFT-based: it builds the analytic signal
+  x + j*H{x}, and from it the envelope (instantaneous amplitude) and
+  instantaneous frequency - the tools behind AM/FM demodulation.
 - **FFT** is an in-place iterative radix-2 transform. It requires
   power-of-two lengths; callers with other lengths zero-pad with
   `dsp_next_pow2`.
@@ -149,7 +152,8 @@ See `docs/ALGORITHMS.md` for the full complexity and trade-off table.
 
 ## Test coverage
 
-154 tests covering: DFT/FFT agreement, FFT and DCT round-trips, FFT
+163 tests covering: DFT/FFT agreement, FFT and DCT round-trips, Hilbert
+transform / envelope / instantaneous-frequency accuracy, FFT
 power-of-two rejection, DCT energy compaction, FIR linear phase and DC
 gain, FIR/IIR high-frequency attenuation, IIR stability detection,
 direct/FFT convolution agreement, the convolution identity,
