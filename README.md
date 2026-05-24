@@ -1,3 +1,6 @@
+![License](https://img.shields.io/github/license/spothana/dsp_guide)
+![Stars](https://img.shields.io/github/stars/spothana/dsp_guide)
+
 # DSP Guide — C Implementation
 
 A reference implementation of the **common digital signal processing
